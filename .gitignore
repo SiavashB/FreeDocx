@@ -1,8 +1,14 @@
+# Xcode and Swift build output
 .build/
 DerivedData/
-.DS_Store
 *.xcuserstate
 xcuserdata/
+
+# macOS and local logs
+.DS_Store
+*.log
+
+# Personal and generated Word documents
 *.doc
 *.docx
 *.docm
