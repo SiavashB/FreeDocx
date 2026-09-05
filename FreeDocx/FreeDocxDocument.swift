@@ -37,6 +37,7 @@ final class FreeDocxDocument: ReferenceFileDocument {
     private var isApplyingProjection = false
 
     init() {
+        FreeDocxLifecycleState.documentDidStartOpening()
         let session = try! DocxDocumentSession()
         self.session = session
         attributedText = session.attributedText
@@ -51,6 +52,7 @@ final class FreeDocxDocument: ReferenceFileDocument {
     }
 
     init(fileData data: Data) throws {
+        FreeDocxLifecycleState.documentDidStartOpening()
         do {
             let session = try DocxDocumentSession(data: data)
             self.session = session

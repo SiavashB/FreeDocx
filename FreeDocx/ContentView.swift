@@ -454,6 +454,11 @@ private struct RichTextEditor: NSViewRepresentable {
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        // SwiftUI can reuse this representable when an untitled document is
+        // replaced by one opened from the app. Keep the coordinator connected
+        // to the current document rather than its original binding.
+        context.coordinator.updateBinding($text)
+
         guard let textView = scrollView.documentView as? PagedTextView else { return }
         textView.apply(pageLayout: pageLayout)
 
@@ -478,6 +483,10 @@ private struct RichTextEditor: NSViewRepresentable {
         var isApplyingExternalUpdate = false
 
         init(text: Binding<NSAttributedString>) {
+            _text = text
+        }
+
+        func updateBinding(_ text: Binding<NSAttributedString>) {
             _text = text
         }
 
