@@ -575,16 +575,30 @@ final class DocxDocumentModel {
         return paragraph
     }
 
+    /// Non-semantic elements Word writes into nearly every real document.
+    /// Editing a paragraph that contains them is safe: `w:proofErr` is an inert
+    /// spell-check hint that is kept as-is, and the `w:lastRendered*Break` runs
+    /// are rendering hints Word regenerates on its next save, so it is
+    /// acceptable for them to disappear from an edited paragraph.
+    private static let harmlessArtifactNames: Set<String> = [
+        "proofErr",
+        "lastRenderedPageBreak",
+        "lastRenderedLineBreak"
+    ]
+
     private static func hasOnlySimpleRuns(_ paragraph: XMLElement) -> Bool {
         for child in paragraph.children ?? [] {
-            guard let element = child as? XMLElement else { continue }
-            guard element.localName == "pPr" || element.localName == "r" else {
+            guard let element = child as? XMLElement, let name = element.localName else {
+                continue
+            }
+            guard name == "pPr" || name == "r" || harmlessArtifactNames.contains(name) else {
                 return false
             }
-            if element.localName == "r" {
+            if name == "r" {
                 for runChild in element.children ?? [] {
-                    guard let runElement = runChild as? XMLElement else { continue }
-                    guard runElement.localName == "rPr" || runElement.localName == "t" else {
+                    guard let runElement = runChild as? XMLElement,
+                          let runName = runElement.localName else { continue }
+                    guard runName == "rPr" || runName == "t" || harmlessArtifactNames.contains(runName) else {
                         return false
                     }
                 }

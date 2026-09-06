@@ -25,12 +25,20 @@ final class FreeDocxDocument: ReferenceFileDocument {
         didSet {
             guard !isApplyingProjection else { return }
             session.acceptEditorText(attributedText)
+            pendingEditMessage = session.pendingError.map {
+                "This edit was rejected and the document can't be saved until it is undone or removed: \($0.localizedDescription)"
+            }
             guard !attributedText.isEqual(to: session.attributedText) else { return }
             isApplyingProjection = true
             attributedText = session.attributedText
             isApplyingProjection = false
         }
     }
+
+    /// User-facing description of the last edit the Word model rejected.
+    /// Nil while every edit has been applied safely.
+    @Published private(set) var pendingEditMessage: String?
+
     let pageLayout: DocumentPageLayout
 
     private let session: DocxDocumentSession

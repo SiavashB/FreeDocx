@@ -22,6 +22,11 @@ struct ContentView: View {
             FormattingToolbar(controller: editorController)
             Divider()
 
+            if let message = document.pendingEditMessage {
+                PendingEditBanner(message: message)
+                Divider()
+            }
+
             RichTextEditor(
                 text: $document.attributedText,
                 pageLayout: document.pageLayout,
@@ -59,6 +64,23 @@ struct ContentView: View {
             .background(.bar)
         }
         .frame(minWidth: 620, minHeight: 480)
+    }
+}
+
+/// Warns the user that the last edit was rejected by the Word model and
+/// that saving is blocked until the edit is undone or removed.
+private struct PendingEditBanner: View {
+    let message: String
+
+    var body: some View {
+        Label(message, systemImage: "exclamationmark.triangle.fill")
+            .font(.caption)
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(.orange)
+            .accessibilityLabel("Pending edit problem: \(message)")
     }
 }
 
