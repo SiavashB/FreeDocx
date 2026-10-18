@@ -298,6 +298,50 @@ enum DocxEditorProjection {
                 continue
             }
 
+            model.applyRunPresentation(
+                to: projection,
+                paragraph: paragraph,
+                in: slice.contentsRange
+            )
+
+            if presentation.spacingBefore != nil
+                || presentation.spacingAfter != nil
+                || presentation.lineSpacing != nil {
+                let existingStyle = projection.attribute(
+                    .paragraphStyle,
+                    at: slice.paragraphRange.location,
+                    effectiveRange: nil
+                ) as? NSParagraphStyle ?? NSParagraphStyle.default
+                let style = existingStyle.mutableCopy() as! NSMutableParagraphStyle
+                if let spacingBefore = presentation.spacingBefore {
+                    style.paragraphSpacingBefore = spacingBefore
+                }
+                if let spacingAfter = presentation.spacingAfter {
+                    style.paragraphSpacing = spacingAfter
+                }
+                if let lineSpacing = presentation.lineSpacing {
+                    switch lineSpacing {
+                    case let .multiple(value):
+                        style.lineHeightMultiple = value
+                        style.minimumLineHeight = 0
+                        style.maximumLineHeight = 0
+                    case let .exact(value):
+                        style.lineHeightMultiple = 0
+                        style.minimumLineHeight = value
+                        style.maximumLineHeight = value
+                    case let .atLeast(value):
+                        style.lineHeightMultiple = 0
+                        style.minimumLineHeight = value
+                        style.maximumLineHeight = 0
+                    }
+                }
+                projection.addAttribute(
+                    .paragraphStyle,
+                    value: style,
+                    range: slice.paragraphRange
+                )
+            }
+
             if !presentation.hasExplicitUnderline {
                 removeImportedUnderline(
                     from: projection,
@@ -356,7 +400,9 @@ enum DocxEditorProjection {
             DocxEditorAttribute.paragraphID,
             DocxEditorAttribute.listMarker,
             DocxEditorAttribute.listMarkerIndent,
-            DocxEditorAttribute.sectionRule
+            DocxEditorAttribute.sectionRule,
+            DocxEditorAttribute.sourceFontFamily,
+            DocxEditorAttribute.substituteFontFamily
         ] {
             result.removeAttribute(key, range: range)
         }

@@ -34,6 +34,8 @@ enum DocxEditorAttribute {
     static let listMarker = NSAttributedString.Key("com.thirdeyeds.FreeDocx.listMarker")
     static let listMarkerIndent = NSAttributedString.Key("com.thirdeyeds.FreeDocx.listMarkerIndent")
     static let sectionRule = NSAttributedString.Key("com.thirdeyeds.FreeDocx.sectionRule")
+    static let sourceFontFamily = NSAttributedString.Key("com.thirdeyeds.FreeDocx.sourceFontFamily")
+    static let substituteFontFamily = NSAttributedString.Key("com.thirdeyeds.FreeDocx.substituteFontFamily")
 }
 
 struct DocxParagraphPresentation {
@@ -42,6 +44,15 @@ struct DocxParagraphPresentation {
     let textIndent: CGFloat?
     let sectionRuleColor: NSColor?
     let hasExplicitUnderline: Bool
+    let spacingBefore: CGFloat?
+    let spacingAfter: CGFloat?
+    let lineSpacing: DocxLineSpacing?
+}
+
+enum DocxLineSpacing {
+    case multiple(CGFloat)
+    case exact(CGFloat)
+    case atLeast(CGFloat)
 }
 
 final class DocxParagraph {
@@ -75,16 +86,27 @@ final class DocxDocumentModel {
     private var isNumberingDirty = false
     private let styles: DocxStyleResolver
     private let stylesData: Data?
+    private let themeData: Data?
+    private let fontTableData: Data?
+    private let settingsData: Data?
     private(set) var isDirty = false
 
     convenience init(package: DocxPackage) throws {
         let documentData = try package.part(named: "word/document.xml")
         let numberingData = try? package.part(named: "word/numbering.xml")
         let stylesData = try? package.part(named: "word/styles.xml")
+        let fontTableData = try? package.part(named: "word/fontTable.xml")
+        let settingsData = try? package.part(named: "word/settings.xml")
+        let themeData = package.paths.first(where: {
+            $0.hasPrefix("word/theme/") && $0.hasSuffix(".xml")
+        }).flatMap { try? package.part(named: $0) }
         try self.init(
             documentData: documentData,
             numberingData: numberingData,
             stylesData: stylesData,
+            themeData: themeData,
+            fontTableData: fontTableData,
+            settingsData: settingsData,
             paragraphIDs: nil
         )
     }
@@ -93,6 +115,9 @@ final class DocxDocumentModel {
         documentData: Data,
         numberingData: Data?,
         stylesData: Data?,
+        themeData: Data?,
+        fontTableData: Data?,
+        settingsData: Data?,
         paragraphIDs: [UUID]?
     ) throws {
         xmlDocument = try XMLDocument(data: documentData, options: [.nodePreserveAll])
@@ -111,7 +136,15 @@ final class DocxDocumentModel {
         self.numberingData = numberingData
         numbering = try DocxNumberingResolver(data: numberingData)
         self.stylesData = stylesData
-        styles = try DocxStyleResolver(data: stylesData)
+        self.themeData = themeData
+        self.fontTableData = fontTableData
+        self.settingsData = settingsData
+        styles = try DocxStyleResolver(
+            data: stylesData,
+            themeData: themeData,
+            fontTableData: fontTableData,
+            settingsData: settingsData
+        )
     }
 
     func transactionalCopy() throws -> DocxDocumentModel {
@@ -119,6 +152,9 @@ final class DocxDocumentModel {
             documentData: documentXMLData(),
             numberingData: numberingData,
             stylesData: stylesData,
+            themeData: themeData,
+            fontTableData: fontTableData,
+            settingsData: settingsData,
             paragraphIDs: paragraphs.map(\.id)
         )
         copy.isDirty = isDirty
@@ -128,6 +164,18 @@ final class DocxDocumentModel {
 
     func paragraph(with id: UUID) -> DocxParagraph? {
         paragraphs.first(where: { $0.id == id })
+    }
+
+    func applyRunPresentation(
+        to projection: NSMutableAttributedString,
+        paragraph: DocxParagraph,
+        in range: NSRange
+    ) {
+        styles.applyRunPresentation(
+            to: projection,
+            paragraph: paragraph.element,
+            in: range
+        )
     }
 
     func pageLayout(fallback: DocumentPageLayout) -> DocumentPageLayout {
@@ -191,12 +239,16 @@ final class DocxDocumentModel {
                 listPresentation = nil
             }
 
+            let paragraphLayout = styles.paragraphLayout(in: paragraph.element)
             result[paragraph.id] = DocxParagraphPresentation(
                 listMarker: listPresentation?.marker,
                 markerIndent: listPresentation?.markerIndent,
                 textIndent: listPresentation?.textIndent,
                 sectionRuleColor: styles.sectionRuleColor(in: paragraph.element),
-                hasExplicitUnderline: styles.hasExplicitUnderline(in: paragraph.element)
+                hasExplicitUnderline: styles.hasExplicitUnderline(in: paragraph.element),
+                spacingBefore: paragraphLayout.spacingBefore,
+                spacingAfter: paragraphLayout.spacingAfter,
+                lineSpacing: paragraphLayout.lineSpacing
             )
         }
         return result
@@ -622,7 +674,17 @@ final class DocxDocumentModel {
         }
 
         if let font = attributes[.font] as? NSFont {
-            let family = font.familyName ?? font.fontName
+            let renderedFamily = font.familyName ?? font.fontName
+            let sourceFamily = attributes[DocxEditorAttribute.sourceFontFamily] as? String
+            let substituteFamily = attributes[DocxEditorAttribute.substituteFontFamily] as? String
+            let family: String
+            if let sourceFamily,
+               let substituteFamily,
+               renderedFamily.caseInsensitiveCompare(substituteFamily) == .orderedSame {
+                family = sourceFamily
+            } else {
+                family = renderedFamily
+            }
             let fonts = XMLElement(name: "w:rFonts")
             for name in ["w:ascii", "w:hAnsi", "w:cs"] {
                 fonts.addAttribute(XMLNode.attribute(withName: name, stringValue: family) as! XMLNode)
@@ -637,27 +699,36 @@ final class DocxDocumentModel {
             }
 
             let traits = NSFontManager.shared.traits(of: font)
-            if traits.contains(.boldFontMask) {
-                properties.addChild(XMLElement(name: "w:b"))
-            }
-            if traits.contains(.italicFontMask) {
-                properties.addChild(XMLElement(name: "w:i"))
+            for (name, enabled) in [
+                ("w:b", traits.contains(.boldFontMask)),
+                ("w:i", traits.contains(.italicFontMask))
+            ] {
+                let property = XMLElement(name: name)
+                // Omission inherits the style; an editor toggle needs an
+                // explicit off value to override inherited emphasis.
+                if !enabled {
+                    property.addAttribute(
+                        XMLNode.attribute(withName: "w:val", stringValue: "0") as! XMLNode
+                    )
+                }
+                properties.addChild(property)
             }
         }
 
         let underlineValue = (attributes[.underlineStyle] as? NSNumber)?.intValue
             ?? (attributes[.underlineStyle] as? Int)
             ?? 0
-        if underlineValue != 0 {
-            let underline = XMLElement(name: "w:u")
-            underline.addAttribute(
-                XMLNode.attribute(withName: "w:val", stringValue: "single") as! XMLNode
-            )
-            properties.addChild(underline)
-        }
+        let underline = XMLElement(name: "w:u")
+        underline.addAttribute(
+            XMLNode.attribute(
+                withName: "w:val",
+                stringValue: underlineValue == 0 ? "none" : "single"
+            ) as! XMLNode
+        )
+        properties.addChild(underline)
 
         if let color = attributes[.foregroundColor] as? NSColor,
-           let rgb = color.usingColorSpace(.deviceRGB) {
+           let rgb = color.usingColorSpace(.sRGB) {
             let red = Int((rgb.redComponent * 255).rounded())
             let green = Int((rgb.greenComponent * 255).rounded())
             let blue = Int((rgb.blueComponent * 255).rounded())
@@ -724,14 +795,209 @@ private struct DocxStyleResolver {
         let runProperties: XMLElement?
     }
 
+    private struct RunPresentation {
+        let utf16Length: Int
+        let properties: ResolvedRunProperties
+    }
+
+    private struct ResolvedFont {
+        let font: NSFont
+        let substitutedSourceFamily: String?
+    }
+
+    private struct ResolvedRunProperties {
+        var fontFamily: String?
+        var pointSize: CGFloat?
+        var bold: Bool?
+        var italic: Bool?
+        var foregroundColor: NSColor?
+        var underline: Bool?
+        var kern: CGFloat?
+
+        var hasFontProperties: Bool {
+            fontFamily != nil || pointSize != nil || bold != nil || italic != nil
+        }
+    }
+
+    struct ParagraphLayout {
+        var spacingBefore: CGFloat?
+        var spacingAfter: CGFloat?
+        var lineSpacing: DocxLineSpacing?
+    }
+
+    private struct DocumentTheme {
+        let majorLatin: String?
+        let minorLatin: String?
+        private let colors: [String: NSColor]
+        private let colorMappings: [String: String]
+
+        init(data: Data?, settingsData: Data?) {
+            var mappings: [String: String] = [:]
+            if let settingsData,
+               let settings = try? XMLDocument(data: settingsData, options: [.nodePreserveAll]),
+               let mapping = try? settings.nodes(
+                   forXPath: "//*[local-name()='clrSchemeMapping']"
+               ).first as? XMLElement {
+                for attribute in mapping.attributes ?? [] {
+                    if let name = attribute.localName, let value = attribute.stringValue {
+                        mappings[name.lowercased()] = value.lowercased()
+                    }
+                }
+            }
+            colorMappings = mappings
+            guard let data,
+                  let document = try? XMLDocument(data: data, options: [.nodePreserveAll]) else {
+                majorLatin = nil
+                minorLatin = nil
+                colors = [:]
+                return
+            }
+            let major = try? document.nodes(
+                forXPath: "//*[local-name()='fontScheme']/*[local-name()='majorFont']/*[local-name()='latin']"
+            ).first as? XMLElement
+            let minor = try? document.nodes(
+                forXPath: "//*[local-name()='fontScheme']/*[local-name()='minorFont']/*[local-name()='latin']"
+            ).first as? XMLElement
+            majorLatin = major.flatMap { DocxStyleResolver.stringAttribute("typeface", in: $0) }
+            minorLatin = minor.flatMap { DocxStyleResolver.stringAttribute("typeface", in: $0) }
+
+            var parsedColors: [String: NSColor] = [:]
+            let entries = ((try? document.nodes(
+                forXPath: "//*[local-name()='themeElements']/*[local-name()='clrScheme']/*"
+            )) ?? []).compactMap { $0 as? XMLElement }
+            for entry in entries {
+                guard let name = entry.localName,
+                      let value = (entry.children ?? []).compactMap({ $0 as? XMLElement }).first else {
+                    continue
+                }
+                let hex: String?
+                switch value.localName {
+                case "srgbClr":
+                    hex = DocxStyleResolver.stringAttribute("val", in: value)
+                case "sysClr":
+                    hex = DocxStyleResolver.stringAttribute("lastClr", in: value)
+                default:
+                    hex = nil
+                }
+                parsedColors[name.lowercased()] = DocxStyleResolver.color(from: hex)
+            }
+            colors = parsedColors
+        }
+
+        func family(for reference: String?) -> String? {
+            guard let reference else { return nil }
+            let value = reference.lowercased()
+            if value.hasPrefix("major") || value.hasPrefix("+mj") {
+                return majorLatin
+            }
+            if value.hasPrefix("minor") || value.hasPrefix("+mn") {
+                return minorLatin
+            }
+            return nil
+        }
+
+        func color(for reference: String) -> NSColor? {
+            let name = reference.lowercased()
+            let mappingKeys = [
+                "background1": "bg1", "text1": "t1",
+                "background2": "bg2", "text2": "t2"
+            ]
+            let mappedName = colorMappings[mappingKeys[name] ?? name] ?? name
+            let schemeNames = [
+                "dark1": "dk1", "light1": "lt1",
+                "dark2": "dk2", "light2": "lt2",
+                "background1": "lt1", "text1": "dk1",
+                "background2": "lt2", "text2": "dk2",
+                "hyperlink": "hlink", "followedhyperlink": "folhlink"
+            ]
+            return colors[schemeNames[mappedName] ?? mappedName]
+        }
+    }
+
+    private struct DocumentFontTable {
+        private struct Entry {
+            let alternativeName: String?
+            let familyClass: String?
+        }
+
+        private let entries: [String: Entry]
+
+        init(data: Data?) {
+            guard let data,
+                  let document = try? XMLDocument(data: data, options: [.nodePreserveAll]) else {
+                entries = [:]
+                return
+            }
+
+            var parsed: [String: Entry] = [:]
+            let fonts = ((try? document.nodes(
+                forXPath: "//*[local-name()='font']"
+            )) ?? []).compactMap { $0 as? XMLElement }
+            for font in fonts {
+                guard let name = DocxStyleResolver.stringAttribute("name", in: font) else {
+                    continue
+                }
+                let alternative = (try? font.nodes(
+                    forXPath: "./*[local-name()='altName']"
+                ).first as? XMLElement).flatMap {
+                    DocxStyleResolver.stringAttribute("val", in: $0)
+                }
+                let family = (try? font.nodes(
+                    forXPath: "./*[local-name()='family']"
+                ).first as? XMLElement).flatMap {
+                    DocxStyleResolver.stringAttribute("val", in: $0)
+                }
+                parsed[name.lowercased()] = Entry(
+                    alternativeName: alternative,
+                    familyClass: family?.lowercased()
+                )
+            }
+            entries = parsed
+        }
+
+        func fallbackFont(for declaredFamily: String, size: CGFloat) -> NSFont? {
+            let normalized = declaredFamily.lowercased()
+            let entry = entries[normalized]
+            if let alternativeName = entry?.alternativeName,
+               let font = NSFont(name: alternativeName, size: size) {
+                return font
+            }
+
+            if normalized.contains("aptos")
+                || normalized.contains("calibri")
+                || normalized.contains("segoe") {
+                return NSFont.systemFont(ofSize: size)
+            }
+
+            switch entry?.familyClass {
+            case "swiss", "system":
+                return NSFont.systemFont(ofSize: size)
+            case "roman":
+                return NSFont(name: "Times New Roman", size: size)
+            case "modern":
+                return NSFont(name: "Courier New", size: size)
+            default:
+                return nil
+            }
+        }
+    }
+
     private let document: XMLDocument?
     private var stylesByID: [String: Style] = [:]
     private let defaultRunProperties: XMLElement?
+    private let defaultParagraphProperties: XMLElement?
+    private let defaultParagraphStyleID: String?
+    private let theme: DocumentTheme
+    private let fontTable: DocumentFontTable
 
-    init(data: Data?) throws {
+    init(data: Data?, themeData: Data?, fontTableData: Data?, settingsData: Data?) throws {
+        theme = DocumentTheme(data: themeData, settingsData: settingsData)
+        fontTable = DocumentFontTable(data: fontTableData)
         guard let data else {
             document = nil
             defaultRunProperties = nil
+            defaultParagraphProperties = nil
+            defaultParagraphStyleID = nil
             return
         }
 
@@ -740,19 +1006,24 @@ private struct DocxStyleResolver {
         defaultRunProperties = try document.nodes(
             forXPath: "//*[local-name()='docDefaults']/*[local-name()='rPrDefault']/*[local-name()='rPr']"
         ).first as? XMLElement
+        defaultParagraphProperties = try document.nodes(
+            forXPath: "//*[local-name()='docDefaults']/*[local-name()='pPrDefault']/*[local-name()='pPr']"
+        ).first as? XMLElement
 
         var parsed: [String: Style] = [:]
+        var parsedDefaultParagraphStyleID: String?
         for node in try document.nodes(forXPath: "//*[local-name()='style']") {
             guard let element = node as? XMLElement,
                   let id = Self.stringAttribute("styleId", in: element) else {
                 continue
             }
+            let type = Self.stringAttribute("type", in: element) ?? "paragraph"
             let basedOnElement = try element.nodes(
                 forXPath: "./*[local-name()='basedOn']"
             ).first as? XMLElement
             parsed[id] = Style(
                 id: id,
-                type: Self.stringAttribute("type", in: element) ?? "paragraph",
+                type: type,
                 basedOn: basedOnElement.flatMap { Self.stringAttribute("val", in: $0) },
                 paragraphProperties: try element.nodes(
                     forXPath: "./*[local-name()='pPr']"
@@ -761,8 +1032,350 @@ private struct DocxStyleResolver {
                     forXPath: "./*[local-name()='rPr']"
                 ).first as? XMLElement
             )
+            if type == "paragraph",
+               Self.onOffAttribute("default", in: element) == true {
+                parsedDefaultParagraphStyleID = id
+            }
         }
         stylesByID = parsed
+        defaultParagraphStyleID = parsedDefaultParagraphStyleID
+    }
+
+    func paragraphLayout(in paragraph: XMLElement) -> ParagraphLayout {
+        var spacingBeforeTwips: Double?
+        var spacingAfterTwips: Double?
+        var lineValue: Double?
+        var lineRule: String?
+
+        let direct = (try? paragraph.nodes(
+            forXPath: "./*[local-name()='pPr']"
+        ).first as? XMLElement) ?? nil
+        let sources = [defaultParagraphProperties]
+            + paragraphStyleChain(for: paragraph).reversed().map(\.paragraphProperties)
+            + [direct]
+
+        for properties in sources.compactMap({ $0 }) {
+            guard let spacing = try? properties.nodes(
+                forXPath: "./*[local-name()='spacing']"
+            ).last as? XMLElement else {
+                continue
+            }
+            if let value = Self.stringAttribute("before", in: spacing).flatMap(Double.init) {
+                spacingBeforeTwips = value
+            }
+            if let value = Self.stringAttribute("after", in: spacing).flatMap(Double.init) {
+                spacingAfterTwips = value
+            }
+            if let value = Self.stringAttribute("line", in: spacing).flatMap(Double.init) {
+                lineValue = value
+            }
+            if let value = Self.stringAttribute("lineRule", in: spacing) {
+                lineRule = value.lowercased()
+            }
+        }
+
+        let resolvedLineSpacing: DocxLineSpacing?
+        if let lineValue {
+            switch lineRule {
+            case "exact":
+                resolvedLineSpacing = .exact(CGFloat(lineValue / 20))
+            case "atleast", "at-least":
+                resolvedLineSpacing = .atLeast(CGFloat(lineValue / 20))
+            default:
+                resolvedLineSpacing = .multiple(CGFloat(lineValue / 240))
+            }
+        } else {
+            resolvedLineSpacing = nil
+        }
+
+        return ParagraphLayout(
+            spacingBefore: spacingBeforeTwips.map { CGFloat($0 / 20) },
+            spacingAfter: spacingAfterTwips.map { CGFloat($0 / 20) },
+            lineSpacing: resolvedLineSpacing
+        )
+    }
+
+    func applyRunPresentation(
+        to projection: NSMutableAttributedString,
+        paragraph: XMLElement,
+        in range: NSRange
+    ) {
+        guard range.length > 0 else { return }
+        let runs = runPresentations(in: paragraph)
+        guard !runs.isEmpty,
+              runs.reduce(0, { $0 + $1.utf16Length }) == range.length else {
+            return
+        }
+
+        var location = range.location
+        for run in runs {
+            let runRange = NSRange(location: location, length: run.utf16Length)
+            apply(run.properties, to: projection, in: runRange)
+            location += run.utf16Length
+        }
+    }
+
+    private func runPresentations(in paragraph: XMLElement) -> [RunPresentation] {
+        let runs = ((try? paragraph.nodes(
+            forXPath: ".//*[local-name()='r']"
+        )) ?? []).compactMap { $0 as? XMLElement }
+
+        return runs.compactMap { run in
+            let text = ((try? run.nodes(
+                forXPath: ".//*[local-name()='t']"
+            )) ?? []).compactMap(\.stringValue).joined()
+            let length = text.utf16.count
+            guard length > 0 else { return nil }
+            return RunPresentation(
+                utf16Length: length,
+                properties: resolvedRunProperties(for: run, paragraph: paragraph)
+            )
+        }
+    }
+
+    private func resolvedRunProperties(
+        for run: XMLElement,
+        paragraph: XMLElement
+    ) -> ResolvedRunProperties {
+        var result = ResolvedRunProperties()
+        merge(defaultRunProperties, into: &result)
+        for style in paragraphStyleChain(for: paragraph).reversed() {
+            merge(style.runProperties, into: &result, isStyleDefinition: true)
+        }
+        for style in characterStyleChain(for: run).reversed() {
+            merge(style.runProperties, into: &result, isStyleDefinition: true)
+        }
+        let direct = try? run.nodes(
+            forXPath: "./*[local-name()='rPr']"
+        ).first as? XMLElement
+        merge(direct ?? nil, into: &result)
+        return result
+    }
+
+    private func merge(
+        _ properties: XMLElement?,
+        into result: inout ResolvedRunProperties,
+        isStyleDefinition: Bool = false
+    ) {
+        guard let properties else { return }
+
+        if let fonts = try? properties.nodes(
+            forXPath: "./*[local-name()='rFonts']"
+        ).last as? XMLElement {
+            let explicitFamily = Self.stringAttribute("ascii", in: fonts)
+                ?? Self.stringAttribute("hAnsi", in: fonts)
+                ?? Self.stringAttribute("cs", in: fonts)
+            let themeReference = Self.stringAttribute("asciiTheme", in: fonts)
+                ?? Self.stringAttribute("hAnsiTheme", in: fonts)
+                ?? Self.stringAttribute("cstheme", in: fonts)
+            if let family = explicitFamily.flatMap(resolvedExplicitFontFamily)
+                ?? theme.family(for: themeReference) {
+                result.fontFamily = family
+            }
+        }
+        if let size = try? properties.nodes(
+            forXPath: "./*[local-name()='sz']"
+        ).last as? XMLElement,
+           let halfPoints = Self.stringAttribute("val", in: size).flatMap(Double.init),
+           halfPoints > 0 {
+            result.pointSize = CGFloat(halfPoints / 2)
+        }
+        if let bold = try? properties.nodes(
+            forXPath: "./*[local-name()='b']"
+        ).last as? XMLElement {
+            result.bold = Self.toggleValue(
+                of: bold,
+                inherited: result.bold,
+                isStyleDefinition: isStyleDefinition
+            )
+        }
+        if let italic = try? properties.nodes(
+            forXPath: "./*[local-name()='i']"
+        ).last as? XMLElement {
+            result.italic = Self.toggleValue(
+                of: italic,
+                inherited: result.italic,
+                isStyleDefinition: isStyleDefinition
+            )
+        }
+        if let color = try? properties.nodes(
+            forXPath: "./*[local-name()='color']"
+        ).last as? XMLElement {
+            // An unresolved direct color must not keep a lower-priority
+            // inherited color and overwrite the importer's presentation.
+            result.foregroundColor = resolvedRunColor(in: color)
+        }
+        if let underline = try? properties.nodes(
+            forXPath: "./*[local-name()='u']"
+        ).last as? XMLElement {
+            result.underline = Self.isActiveUnderline(underline)
+        }
+        if let spacing = try? properties.nodes(
+            forXPath: "./*[local-name()='spacing']"
+        ).last as? XMLElement,
+           let twips = Self.stringAttribute("val", in: spacing).flatMap(Double.init) {
+            result.kern = CGFloat(twips / 20)
+        }
+    }
+
+    private func resolvedRunColor(in element: XMLElement) -> NSColor? {
+        guard let reference = Self.stringAttribute("themeColor", in: element),
+              let base = theme.color(for: reference)?.usingColorSpace(.sRGB) else {
+            return Self.color(from: Self.stringAttribute("val", in: element))
+        }
+
+        func fraction(for attribute: String) -> CGFloat? {
+            guard let hex = Self.stringAttribute(attribute, in: element),
+                  hex.count == 2,
+                  let value = UInt8(hex, radix: 16) else { return nil }
+            return CGFloat(value) / 255
+        }
+
+        let tint = fraction(for: "themeTint")
+        let shade = fraction(for: "themeShade")
+        guard tint != nil || shade != nil else { return base }
+
+        // Word changes HSL luminance, with tint taking precedence over shade.
+        let red = base.redComponent
+        let green = base.greenComponent
+        let blue = base.blueComponent
+        let minimum = min(red, green, blue)
+        let maximum = max(red, green, blue)
+        let luminance = (minimum + maximum) / 2
+        let adjustedLuminance: CGFloat
+        if let tint {
+            adjustedLuminance = 1 - (1 - luminance) * tint
+        } else {
+            adjustedLuminance = luminance * (shade ?? 1)
+        }
+
+        let chroma = maximum - minimum
+        let saturation = chroma == 0 ? 0 : chroma / (1 - abs(2 * luminance - 1))
+        let adjustedChroma = (1 - abs(2 * adjustedLuminance - 1)) * saturation
+        let scale = chroma == 0 ? 0 : adjustedChroma / chroma
+        func adjusted(_ component: CGFloat) -> CGFloat {
+            min(1, max(0, adjustedLuminance + (component - luminance) * scale))
+        }
+        return NSColor(
+            srgbRed: adjusted(red),
+            green: adjusted(green),
+            blue: adjusted(blue),
+            alpha: base.alphaComponent
+        )
+    }
+
+    private func apply(
+        _ properties: ResolvedRunProperties,
+        to projection: NSMutableAttributedString,
+        in range: NSRange
+    ) {
+        guard range.length > 0 else { return }
+
+        if properties.hasFontProperties {
+            let existingFont = projection.attribute(
+                .font,
+                at: range.location,
+                effectiveRange: nil
+            ) as? NSFont
+            if let resolvedFont = resolvedFont(from: properties, fallback: existingFont) {
+                projection.addAttribute(.font, value: resolvedFont.font, range: range)
+                if let sourceFamily = resolvedFont.substitutedSourceFamily {
+                    let substituteFamily = resolvedFont.font.familyName
+                        ?? resolvedFont.font.fontName
+                    projection.addAttribute(
+                        DocxEditorAttribute.sourceFontFamily,
+                        value: sourceFamily,
+                        range: range
+                    )
+                    projection.addAttribute(
+                        DocxEditorAttribute.substituteFontFamily,
+                        value: substituteFamily,
+                        range: range
+                    )
+                } else {
+                    projection.removeAttribute(
+                        DocxEditorAttribute.sourceFontFamily,
+                        range: range
+                    )
+                    projection.removeAttribute(
+                        DocxEditorAttribute.substituteFontFamily,
+                        range: range
+                    )
+                }
+            }
+        }
+        if let color = properties.foregroundColor {
+            projection.addAttribute(.foregroundColor, value: color, range: range)
+        }
+        if let underline = properties.underline {
+            if underline {
+                projection.addAttribute(
+                    .underlineStyle,
+                    value: NSUnderlineStyle.single.rawValue,
+                    range: range
+                )
+            } else {
+                projection.removeAttribute(.underlineStyle, range: range)
+                projection.removeAttribute(.underlineColor, range: range)
+            }
+        }
+        if let kern = properties.kern {
+            if abs(kern) < 0.001 {
+                projection.removeAttribute(.kern, range: range)
+            } else {
+                projection.addAttribute(.kern, value: kern, range: range)
+            }
+        }
+    }
+
+    private func resolvedFont(
+        from properties: ResolvedRunProperties,
+        fallback: NSFont?
+    ) -> ResolvedFont? {
+        let size = properties.pointSize ?? fallback?.pointSize ?? NSFont.systemFontSize
+        let baseFont: NSFont
+        let substitutedSourceFamily: String?
+        if let family = properties.fontFamily,
+           let namedFont = NSFont(name: family, size: size) {
+            baseFont = namedFont
+            substitutedSourceFamily = nil
+        } else if let family = properties.fontFamily,
+                  let substitute = fontTable.fallbackFont(for: family, size: size) {
+            baseFont = substitute
+            substitutedSourceFamily = family
+        } else if let fallback {
+            baseFont = NSFontManager.shared.convert(fallback, toSize: size)
+            substitutedSourceFamily = nil
+        } else {
+            baseFont = NSFont.systemFont(ofSize: size)
+            substitutedSourceFamily = nil
+        }
+
+        let manager = NSFontManager.shared
+        var font = manager.convert(
+            baseFont,
+            toNotHaveTrait: [.boldFontMask, .italicFontMask]
+        )
+        if properties.bold == true {
+            font = manager.convert(font, toHaveTrait: .boldFontMask)
+        }
+        if properties.italic == true {
+            font = manager.convert(font, toHaveTrait: .italicFontMask)
+        }
+        return ResolvedFont(
+            font: font,
+            substitutedSourceFamily: substitutedSourceFamily
+        )
+    }
+
+    private func resolvedExplicitFontFamily(_ family: String) -> String? {
+        if family.hasPrefix("+mj") {
+            return theme.majorLatin
+        }
+        if family.hasPrefix("+mn") {
+            return theme.minorLatin
+        }
+        return family.isEmpty ? nil : family
     }
 
     func listReference(in paragraph: XMLElement) -> (numID: Int, level: Int)? {
@@ -841,13 +1454,24 @@ private struct DocxStyleResolver {
     }
 
     private func paragraphStyleChain(for paragraph: XMLElement) -> [Style] {
-        guard let styleElement = try? paragraph.nodes(
+        let explicitStyleElement = try? paragraph.nodes(
             forXPath: "./*[local-name()='pPr']/*[local-name()='pStyle']"
+        ).first as? XMLElement
+        let styleID = (explicitStyleElement ?? nil).flatMap {
+            Self.stringAttribute("val", in: $0)
+        } ?? defaultParagraphStyleID
+        guard let styleID else { return [] }
+        return styleChain(startingAt: styleID, requiredType: "paragraph")
+    }
+
+    private func characterStyleChain(for run: XMLElement) -> [Style] {
+        guard let styleElement = try? run.nodes(
+            forXPath: "./*[local-name()='rPr']/*[local-name()='rStyle']"
         ).first as? XMLElement,
               let styleID = Self.stringAttribute("val", in: styleElement) else {
             return []
         }
-        return styleChain(startingAt: styleID, requiredType: "paragraph")
+        return styleChain(startingAt: styleID, requiredType: "character")
     }
 
     private func styleChain(startingAt styleID: String, requiredType: String) -> [Style] {
@@ -883,6 +1507,30 @@ private struct DocxStyleResolver {
         return value == nil || (value != "none" && value != "nil" && value != "0")
     }
 
+    private static func toggleValue(
+        of element: XMLElement,
+        inherited: Bool?,
+        isStyleDefinition: Bool
+    ) -> Bool? {
+        let enabled = onOffValue(of: element)
+        guard isStyleDefinition else { return enabled }
+        // Within a style, true flips the inherited state and false leaves it
+        // alone. Direct run formatting instead sets an absolute value.
+        return enabled ? !(inherited ?? false) : inherited
+    }
+
+    private static func onOffValue(of element: XMLElement) -> Bool {
+        let value = stringAttribute("val", in: element)?.lowercased()
+        return value == nil || !["0", "false", "off", "none"].contains(value!)
+    }
+
+    private static func onOffAttribute(_ localName: String, in element: XMLElement) -> Bool? {
+        guard let value = stringAttribute(localName, in: element)?.lowercased() else {
+            return nil
+        }
+        return !["0", "false", "off", "none"].contains(value)
+    }
+
     private static func integerAttribute(_ localName: String, in element: XMLElement) -> Int? {
         stringAttribute(localName, in: element).flatMap(Int.init)
     }
@@ -901,7 +1549,7 @@ private struct DocxStyleResolver {
             return nil
         }
         return NSColor(
-            calibratedRed: CGFloat((rgb >> 16) & 0xFF) / 255,
+            srgbRed: CGFloat((rgb >> 16) & 0xFF) / 255,
             green: CGFloat((rgb >> 8) & 0xFF) / 255,
             blue: CGFloat(rgb & 0xFF) / 255,
             alpha: 1
