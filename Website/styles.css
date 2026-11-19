@@ -91,8 +91,9 @@ h1 { margin: 0; font-size: clamp(2.75rem, 4.45vw, 4rem); font-weight: 600; line-
 
 .workflow { display: grid; grid-template-columns: 350px minmax(0, 1fr); align-items: center; gap: 46px; padding: 42px 64px; border-radius: 28px; background: linear-gradient(110deg, #f3f8ff, #edf5ff); }
 .workflow-art { display: flex; justify-content: center; align-items: center; gap: 18px; }
-.workflow-file { width: 110px; height: 120px; }
-.workflow-robot { width: 124px; height: 124px; }
+.workflow-file { flex: none; width: 110px; height: 120px; }
+.workflow-assistants { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; width: 148px; min-width: 0; }
+.workflow-assistants img { width: 100%; aspect-ratio: 1; padding: 16%; border: 1px solid #dbe5ef; border-radius: 24%; background: #fff; }
 .handoff-arrows { width: 56px; height: 56px; fill: none; stroke: #146df1; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
 .workflow-copy h2 { margin: 0; font-size: clamp(1.5rem, 2.3vw, 2.125rem); line-height: 1.3; font-weight: 600; letter-spacing: -.7px; }
 .workflow-copy > p { margin: 18px 0 0; font-size: 1.25rem; line-height: 1.6; }
@@ -141,7 +142,7 @@ h1 { margin: 0; font-size: clamp(2.75rem, 4.45vw, 4rem); font-weight: 600; line-
   .workflow { grid-template-columns: 300px minmax(0, 1fr); gap: 32px; padding-inline: 38px; }
   .workflow-art { gap: 11px; }
   .workflow-file { width: 95px; height: 104px; }
-  .workflow-robot { width: 110px; height: 110px; }
+  .workflow-assistants { width: 126px; }
   .workflow-copy > p { font-size: 1.125rem; }
   .assurances { gap: 40px; }
   .assurances li { font-size: 1rem; }
@@ -168,7 +169,6 @@ h1 { margin: 0; font-size: clamp(2.75rem, 4.45vw, 4rem); font-weight: 600; line-
   .workflow { grid-template-columns: 1fr; gap: 28px; padding: 35px 40px; }
   .workflow-art { gap: 24px; justify-content: flex-start; }
   .workflow-file { width: 95px; height: 104px; }
-  .workflow-robot { width: 110px; height: 110px; }
   .workflow-copy h2 { font-size: 1.75rem; }
   .workflow-copy > p { max-width: 650px; font-size: 1.1875rem; }
   .assurances { flex-wrap: wrap; justify-content: flex-start; gap: 18px 35px; margin-block: 35px; }
@@ -214,7 +214,7 @@ h1 { margin: 0; font-size: clamp(2.75rem, 4.45vw, 4rem); font-weight: 600; line-
   .workflow { padding: 28px 23px; gap: 24px; border-radius: 22px; }
   .workflow-art { justify-content: center; gap: 14px; }
   .workflow-file { width: 82px; height: 90px; }
-  .workflow-robot { width: 96px; height: 96px; }
+  .workflow-assistants { width: 112px; gap: 8px; }
   .handoff-arrows { width: 46px; height: 46px; }
   .workflow-copy h2 { font-size: 1.5rem; letter-spacing: -.45px; }
   .workflow-copy > p { font-size: 1.0625rem; margin-top: 14px; }
