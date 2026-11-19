@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="110" height="120" viewBox="0 0 110 120" fill="none">
+  <path d="M24 9h47l26 27v66a6 6 0 0 1-6 6H24a6 6 0 0 1-6-6V15a6 6 0 0 1 6-6Z" fill="#fff" stroke="#0872ff" stroke-width="4" stroke-linejoin="round"/>
+  <path d="M71 10v21a5 5 0 0 0 5 5h20" stroke="#0872ff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="3" y="68" width="97" height="45" rx="9" fill="#086aff"/>
+  <text x="51.5" y="99" fill="#fff" font-family="Arial, Helvetica, sans-serif" font-size="27" font-weight="600" text-anchor="middle" letter-spacing="-.5">DOCX</text>
+</svg>
