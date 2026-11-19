@@ -1,4 +1,5 @@
 # Xcode and Swift build output
+Temp/
 .build/
 DerivedData/
 *.xcuserstate
