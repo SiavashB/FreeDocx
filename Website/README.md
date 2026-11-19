@@ -1,6 +1,6 @@
 # FreeDocx website
 
-A responsive, dependency-free landing page based on the approved November 18, 2026 mockup. The AI workflow pairs a DOCX file badge with the ChatGPT and Claude icons. All illustration assets are local SVG or HTML/CSS. The résumé is invented sample content.
+A responsive, dependency-free landing page based on the approved November 18, 2026 mockup. The AI workflow diagram places one DOCX file between the person editing it and their AI assistant, represented by the ChatGPT and Claude icons. All illustration assets are local SVG or HTML/CSS. The résumé is invented sample content.
 
 The ChatGPT and Claude marks belong to OpenAI and Anthropic, respectively. The SVG artwork comes from [Lobe Icons](https://github.com/lobehub/lobe-icons) and includes its [MIT license](assets/assistant-icons-license.txt).
 
