@@ -27,7 +27,6 @@
       <symbol id="icon-align-right" viewBox="0 0 24 24"><path d="M4 5h16M9 10h11M4 15h16M9 20h11"/></symbol>
       <symbol id="icon-list" viewBox="0 0 24 24"><path d="M9 5h11M9 12h11M9 19h11M4 5h.01M4 12h.01M4 19h.01"/></symbol>
       <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></symbol>
-      <symbol id="icon-two-way" viewBox="0 0 32 20"><path d="M3 10h26M9 4l-6 6 6 6M23 4l6 6-6 6"/></symbol>
     </svg>
 
     <a class="skip-link" href="#main">Skip to content</a>
@@ -117,27 +116,34 @@
       </section>
 
       <section class="workflow wrap-wide" id="workflow" aria-labelledby="workflow-title">
-        <div class="workflow-art" role="img" aria-label="You and an AI assistant with local file access take turns editing the same .docx file. The ChatGPT and Claude logos represent the assistant.">
-          <div class="workflow-node">
-            <img class="workflow-person" src="assets/person.svg" width="64" height="64" alt="" loading="lazy">
-            <span>You</span>
-          </div>
-          <svg class="handoff-arrows" aria-hidden="true"><use href="#icon-two-way"/></svg>
-          <div class="workflow-node">
-            <img class="workflow-file" src="assets/docx-file.svg" width="110" height="120" alt="" loading="lazy">
-            <span>Same file</span>
-          </div>
-          <svg class="handoff-arrows" aria-hidden="true"><use href="#icon-two-way"/></svg>
-          <div class="workflow-node">
-            <div class="workflow-assistants">
-              <img src="assets/chatgpt.svg" width="64" height="64" alt="" loading="lazy">
-              <img src="assets/claude.svg" width="64" height="64" alt="" loading="lazy">
-            </div>
-            <span>AI assistant</span>
-          </div>
-        </div>
+        <svg class="workflow-art" viewBox="0 0 332 196" width="332" height="196" role="img" aria-labelledby="workflow-diagram-title" aria-describedby="workflow-diagram-desc">
+          <title id="workflow-diagram-title">You and your AI assistant work on one document</title>
+          <desc id="workflow-diagram-desc">You chat with your assistant, represented by the ChatGPT and Claude logos. Arrows from both of you lead to the same local .docx file, which you take turns editing.</desc>
+          <defs>
+            <marker id="workflow-arrowhead" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
+              <path d="M2 1.5 8 5 2 8.5" fill="none" stroke="#4280b9" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+            </marker>
+          </defs>
+          <g fill="none" stroke="#4280b9" stroke-width="1.6" marker-start="url(#workflow-arrowhead)" marker-end="url(#workflow-arrowhead)">
+            <path d="M94 32H218"/>
+            <path d="M81 87 131 132"/>
+            <path d="M251 87 201 132"/>
+          </g>
+          <text class="workflow-chat-label" x="156" y="22">Chat</text>
+
+          <image href="assets/person.svg" x="29" y="5" width="54" height="54"/>
+          <text x="56" y="78">You</text>
+
+          <rect x="229" y="6" width="94" height="52" rx="13" fill="white" stroke="#dbe5ef"/>
+          <image href="assets/chatgpt.svg" x="238" y="15" width="34" height="34"/>
+          <image href="assets/claude.svg" x="280" y="15" width="34" height="34"/>
+          <text x="276" y="78">AI assistant</text>
+
+          <image href="assets/docx-file.svg" x="138.5" y="110" width="55" height="60"/>
+          <text x="166" y="189">Same file</text>
+        </svg>
         <div class="workflow-copy">
-          <h2 id="workflow-title">Also works well with an AI assistant</h2>
+          <h2 id="workflow-title">Collaborate with an AI assistant</h2>
           <p>Take turns on the same document — edit in FreeDocx, then ask your AI assistant to review, rewrite, or improve it using your local file.</p>
           <p class="workflow-note">For assistants with local file access.</p>
         </div>
