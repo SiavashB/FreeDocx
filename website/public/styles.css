@@ -29,7 +29,6 @@ a:focus-visible, button:focus-visible, summary:focus-visible { outline: 3px soli
 
 .site-header { min-height: 88px; display: flex; justify-content: space-between; align-items: center; gap: 28px; }
 .brand { display: inline-flex; align-items: center; gap: 15px; font-size: 1.875rem; font-weight: 650; letter-spacing: -.9px; }
-.brand img { width: 36px; height: 42px; }
 .site-header nav { display: flex; gap: 42px; align-items: center; font-size: 1rem; }
 .site-header nav a { padding-block: 12px; }
 .site-header nav a:hover, .site-footer a:hover { color: var(--blue); }
@@ -184,7 +183,7 @@ h1 { margin: 0; font-size: clamp(2.75rem, 4.45vw, 4rem); font-weight: 600; line-
   .wrap-wide { width: calc(100% - 28px); }
   .site-header { flex-wrap: wrap; gap: 9px; padding-block: 18px 14px; }
   .brand { font-size: 1.625rem; gap: 12px; }
-  .brand img { width: 29px; height: 34px; }
+  .brand img { width: 34px; }
   .site-header nav { width: 100%; gap: 26px; font-size: .875rem; }
   .site-header nav a { padding-block: 6px; }
   .hero-layout { gap: 32px; padding-block: 30px 35px; }
