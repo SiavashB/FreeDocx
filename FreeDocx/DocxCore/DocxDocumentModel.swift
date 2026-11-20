@@ -39,11 +39,12 @@ enum DocxEditorAttribute {
 }
 
 struct DocxParagraphPresentation {
-    let listMarker: String?
-    let markerIndent: CGFloat?
-    let textIndent: CGFloat?
+    let listReference: (numID: Int, level: Int)?
+    var listMarker: String?
+    var markerIndent: CGFloat?
+    var textIndent: CGFloat?
     let sectionRuleColor: NSColor?
-    let hasExplicitUnderline: Bool
+    var hasExplicitUnderline: Bool
     let spacingBefore: CGFloat?
     let spacingAfter: CGFloat?
     let lineSpacing: DocxLineSpacing?
@@ -58,6 +59,7 @@ enum DocxLineSpacing {
 final class DocxParagraph {
     let id: UUID
     fileprivate(set) var element: XMLElement
+    fileprivate(set) var presentation: DocxParagraphPresentation?
 
     init(id: UUID = UUID(), element: XMLElement) {
         self.id = id
@@ -81,6 +83,7 @@ final class DocxParagraph {
 final class DocxDocumentModel {
     private(set) var xmlDocument: XMLDocument
     private(set) var paragraphs: [DocxParagraph]
+    private var paragraphsByID: [UUID: DocxParagraph]
     private var numbering: DocxNumberingResolver
     private var numberingData: Data?
     private var isNumberingDirty = false
@@ -126,13 +129,15 @@ final class DocxDocumentModel {
         guard elements.count == nodes.count else {
             throw DocxModelError.invalidDocumentXML
         }
-        if let paragraphIDs, paragraphIDs.count == elements.count {
+        if let paragraphIDs {
+            guard paragraphIDs.count == elements.count else { throw DocxModelError.unknownParagraphID }
             paragraphs = zip(paragraphIDs, elements).map {
                 DocxParagraph(id: $0.0, element: $0.1)
             }
         } else {
             paragraphs = elements.map { DocxParagraph(element: $0) }
         }
+        paragraphsByID = Dictionary(uniqueKeysWithValues: paragraphs.map { ($0.id, $0) })
         self.numberingData = numberingData
         numbering = try DocxNumberingResolver(data: numberingData)
         self.stylesData = stylesData
@@ -157,13 +162,55 @@ final class DocxDocumentModel {
             settingsData: settingsData,
             paragraphIDs: paragraphs.map(\.id)
         )
+        for paragraph in copy.paragraphs {
+            paragraph.presentation = paragraphsByID[paragraph.id]?.presentation
+        }
         copy.isDirty = isDirty
         copy.isNumberingDirty = isNumberingDirty
         return copy
     }
 
     func paragraph(with id: UUID) -> DocxParagraph? {
-        paragraphs.first(where: { $0.id == id })
+        paragraphsByID[id]
+    }
+
+    func isListParagraph(_ paragraph: DocxParagraph) -> Bool {
+        if let presentation = paragraph.presentation { return presentation.listReference != nil }
+        return styles.listReference(in: paragraph.element) != nil
+    }
+
+    // Stage ordinary edits on detached nodes. A paragraph containing another
+    // paragraph needs the structural transaction to preserve descendant identities.
+    func stagedParagraph(
+        _ original: DocxParagraph, contents: NSAttributedString?, alignment: NSTextAlignment?
+    ) throws -> DocxParagraph? {
+        guard original.element.parent is XMLElement,
+              try original.element.nodes(forXPath: ".//*[local-name()='p']").isEmpty else { return nil }
+        let copy = DocxParagraph(id: original.id, element: original.element.copy() as! XMLElement)
+        copy.presentation = original.presentation
+        if let contents { try writeRunFormatting(to: copy, from: contents) }
+        if let alignment { try Self.writeAlignment(of: copy, to: alignment) }
+        return copy
+    }
+
+    func commitParagraphs(_ replacements: [DocxParagraph]) throws {
+        // Resolve every destination before touching the live XML. Replacing a
+        // paragraph in place preserves the sibling positions of other edits.
+        let edits = try replacements.map { replacement in
+            guard let original = paragraphsByID[replacement.id],
+                  let parent = original.element.parent as? XMLElement else {
+                throw DocxModelError.unknownParagraphID
+            }
+            return (original, replacement, parent)
+        }
+        for (original, replacement, parent) in edits {
+            let index = original.element.index
+            original.element.detach()
+            parent.insertChild(replacement.element, at: index)
+            original.element = replacement.element
+            original.presentation = replacement.presentation
+        }
+        if !replacements.isEmpty { isDirty = true }
     }
 
     func applyRunPresentation(
@@ -211,7 +258,23 @@ final class DocxDocumentModel {
         var result: [UUID: DocxParagraphPresentation] = [:]
 
         for paragraph in paragraphs {
-            let listReference = styles.listReference(in: paragraph.element)
+            let element = paragraph.element
+            var presentation: DocxParagraphPresentation
+            if let cached = paragraph.presentation {
+                presentation = cached
+            } else {
+                let layout = styles.paragraphLayout(in: element)
+                presentation = DocxParagraphPresentation(
+                    listReference: styles.listReference(in: element),
+                    sectionRuleColor: styles.sectionRuleColor(in: element),
+                    hasExplicitUnderline: styles.hasExplicitUnderline(in: element),
+                    spacingBefore: layout.spacingBefore,
+                    spacingAfter: layout.spacingAfter,
+                    lineSpacing: layout.lineSpacing
+                )
+            }
+
+            let listReference = presentation.listReference
             let listPresentation: (marker: String, markerIndent: CGFloat, textIndent: CGFloat)?
             if let listReference,
                let level = numbering.level(numID: listReference.numID, level: listReference.level) {
@@ -239,17 +302,11 @@ final class DocxDocumentModel {
                 listPresentation = nil
             }
 
-            let paragraphLayout = styles.paragraphLayout(in: paragraph.element)
-            result[paragraph.id] = DocxParagraphPresentation(
-                listMarker: listPresentation?.marker,
-                markerIndent: listPresentation?.markerIndent,
-                textIndent: listPresentation?.textIndent,
-                sectionRuleColor: styles.sectionRuleColor(in: paragraph.element),
-                hasExplicitUnderline: styles.hasExplicitUnderline(in: paragraph.element),
-                spacingBefore: paragraphLayout.spacingBefore,
-                spacingAfter: paragraphLayout.spacingAfter,
-                lineSpacing: paragraphLayout.lineSpacing
-            )
+            presentation.listMarker = listPresentation?.marker
+            presentation.markerIndent = listPresentation?.markerIndent
+            presentation.textIndent = listPresentation?.textIndent
+            paragraph.presentation = presentation
+            result[paragraph.id] = presentation
         }
         return result
     }
@@ -263,15 +320,26 @@ final class DocxDocumentModel {
         isDirty = true
     }
 
-    func applyRunFormatting(
-        to paragraph: DocxParagraph,
-        from attributedText: NSAttributedString
-    ) throws {
+    func validateRunEditing(of paragraph: DocxParagraph) throws {
         guard !paragraph.isComplex,
               Self.hasOnlySimpleRuns(paragraph.element) else {
             throw DocxModelError.unsupportedComplexParagraph
         }
+    }
 
+    func applyRunFormatting(
+        to paragraph: DocxParagraph,
+        from attributedText: NSAttributedString
+    ) throws {
+        try writeRunFormatting(to: paragraph, from: attributedText)
+        isDirty = true
+    }
+
+    private func writeRunFormatting(to paragraph: DocxParagraph, from attributedText: NSAttributedString) throws {
+        try validateRunEditing(of: paragraph)
+        defer {
+            paragraph.presentation?.hasExplicitUnderline = styles.hasExplicitUnderline(in: paragraph.element)
+        }
         let existingRuns = (paragraph.element.children ?? []).compactMap { child -> XMLElement? in
             guard let element = child as? XMLElement, element.localName == "r" else { return nil }
             return element
@@ -283,7 +351,6 @@ final class DocxDocumentModel {
 
         if attributedText.length == 0 {
             paragraph.element.addChild(XMLElement(name: "w:r"))
-            isDirty = true
             return
         }
 
@@ -312,13 +379,17 @@ final class DocxDocumentModel {
             run.addChild(text)
             paragraph.element.addChild(run)
         }
-        isDirty = true
     }
 
     func setAlignment(
         of paragraph: DocxParagraph,
         to alignment: NSTextAlignment
     ) throws {
+        try Self.writeAlignment(of: paragraph, to: alignment)
+        isDirty = true
+    }
+
+    private static func writeAlignment(of paragraph: DocxParagraph, to alignment: NSTextAlignment) throws {
         let paragraphProperties: XMLElement
         if let existing = try paragraph.element.nodes(
             forXPath: "./*[local-name()='pPr']"
@@ -347,7 +418,6 @@ final class DocxDocumentModel {
             XMLNode.attribute(withName: "w:val", stringValue: value) as! XMLNode
         )
         paragraphProperties.addChild(justification)
-        isDirty = true
     }
 
     func setBulletedList(
@@ -401,6 +471,7 @@ final class DocxDocumentModel {
                 node.detach()
             }
         }
+        paragraph.presentation = nil
         isDirty = true
     }
 
@@ -414,19 +485,18 @@ final class DocxDocumentModel {
             throw DocxModelError.unknownParagraphID
         }
         let element = try Self.makeParagraph(text: text, from: template.element)
-        try Self.insert(element, among: paragraphs.map(\.element), at: index)
+        try Self.insert(element, among: paragraphs, at: index)
         let paragraph = DocxParagraph(element: element)
         paragraphs.insert(paragraph, at: index)
+        paragraphsByID[paragraph.id] = paragraph
         isDirty = true
         return paragraph
     }
 
-    func deleteParagraph(_ paragraph: DocxParagraph) throws {
-        guard let index = paragraphs.firstIndex(where: { $0 === paragraph }) else {
-            throw DocxModelError.unknownParagraphID
-        }
+    func deleteParagraph(at index: Int) {
+        let paragraph = paragraphs.remove(at: index)
         paragraph.element.detach()
-        paragraphs.remove(at: index)
+        paragraphsByID.removeValue(forKey: paragraph.id)
         isDirty = true
     }
 
@@ -745,11 +815,11 @@ final class DocxDocumentModel {
 
     private static func insert(
         _ paragraph: XMLElement,
-        among current: [XMLElement],
+        among current: [DocxParagraph],
         at index: Int
     ) throws {
-        let previous = index > 0 ? current[index - 1] : nil
-        let next = index < current.count ? current[index] : nil
+        let previous = index > 0 ? current[index - 1].element : nil
+        let next = index < current.count ? current[index].element : nil
         if let previous, let next, previous.parent !== next.parent {
             throw DocxModelError.unsupportedParagraphContainer
         }

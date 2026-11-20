@@ -41,6 +41,84 @@ enum DocxEditorProjection {
         return projection.copy() as! NSAttributedString
     }
 
+    /// Prepare run and alignment changes on detached paragraph nodes. Structural
+    /// edits use the sequence reconciler so later list numbers can change too.
+    static func prepareParagraphEdits(
+        editorText: NSAttributedString, previousText: NSAttributedString,
+        affectedRange: NSRange?, model: DocxDocumentModel
+    ) throws -> (paragraphs: [DocxParagraph], text: NSAttributedString)? {
+        let (before, after) = paragraphEditRanges(
+            before: previousText, after: editorText, hint: affectedRange
+        )
+        // Cocoa can store a final empty paragraph's ID on its predecessor's
+        // newline. Changes there use the structural reconciler.
+        if NSMaxRange(after) == editorText.length,
+           endsInNewline(editorText.string) != endsInNewline(previousText.string)
+                || hasSeparateTrailingParagraph(in: previousText) {
+            return nil
+        }
+        let oldSlices = paragraphSlices(in: previousText, within: before)
+        let newSlices = paragraphSlices(in: editorText, within: after)
+        guard oldSlices.count == newSlices.count else { return nil }
+        let projection = NSMutableAttributedString(attributedString: editorText)
+        var replacements: [DocxParagraph] = []
+        for (old, new) in zip(oldSlices, newSlices) {
+            guard let id = old.id, id == new.id, old.isList == new.isList,
+                  let original = model.paragraph(with: id) else { return nil }
+            if previousText.attributedSubstring(from: old.paragraphRange).isEqual(
+                to: editorText.attributedSubstring(from: new.paragraphRange)
+            ) { continue }
+            let contents = editorText.attributedSubstring(from: new.contentsRange)
+            let oldContents = previousText.attributedSubstring(from: old.contentsRange)
+            let runsChanged = !runFormattingIsEqual(oldContents, contents)
+            let alignment = paragraphAlignment(in: editorText, at: new.paragraphRange.location)
+            let alignmentChanged = alignment != paragraphAlignment(in: previousText, at: old.paragraphRange.location)
+            guard model.isListParagraph(original) == new.isList,
+                  let staged = try model.stagedParagraph(
+                      original, contents: runsChanged ? contents : nil,
+                      alignment: alignmentChanged ? alignment : nil
+                  ), let presentation = staged.presentation else { return nil }
+            if runsChanged || alignmentChanged { replacements.append(staged) }
+            projection.addAttribute(DocxEditorAttribute.paragraphID, value: id.uuidString, range: new.paragraphRange)
+            applyPresentation(presentation, to: projection, paragraph: staged, model: model,
+                              paragraphRange: new.paragraphRange, contentsRange: new.contentsRange)
+        }
+        return (replacements, projection.copy() as! NSAttributedString)
+    }
+
+    private static func paragraphEditRanges(
+        before old: NSAttributedString, after new: NSAttributedString, hint: NSRange?
+    ) -> (NSRange, NSRange) {
+        let fullRanges = (NSRange(location: 0, length: old.length), NSRange(location: 0, length: new.length))
+        guard let hint, NSMaxRange(hint) <= old.length else { return fullRanges }
+
+        // Include both sides of splits/merges. Paste and Undo can change
+        // attributes outside the announced range, so verify both boundaries.
+        let start = max(0, hint.location - 1)
+        let end = min(old.length, NSMaxRange(hint) + 1)
+        let oldSpan = (old.string as NSString).paragraphRange(for: NSRange(location: start, length: end - start))
+        let newLength = oldSpan.length + new.length - old.length
+        guard newLength > 0, oldSpan.location + newLength <= new.length else { return fullRanges }
+        let newSpan = NSRange(location: oldSpan.location, length: newLength)
+        let prefix = NSRange(location: 0, length: oldSpan.location)
+        let suffixLength = old.length - NSMaxRange(oldSpan)
+        let oldSuffix = NSRange(location: NSMaxRange(oldSpan), length: suffixLength)
+        let newSuffix = NSRange(location: NSMaxRange(newSpan), length: suffixLength)
+        guard (new.string as NSString).paragraphRange(for: newSpan) == newSpan,
+              old.attributedSubstring(from: prefix).isEqual(to: new.attributedSubstring(from: prefix)),
+              old.attributedSubstring(from: oldSuffix).isEqual(to: new.attributedSubstring(from: newSuffix))
+        else { return fullRanges }
+        return (oldSpan, newSpan)
+    }
+
+    private static func hasSeparateTrailingParagraph(in text: NSAttributedString) -> Bool {
+        guard let id = trailingEmptySlice(in: text)?.id else { return false }
+        let newline = NSRange(location: text.length - 1, length: 1)
+        let start = (text.string as NSString).paragraphRange(for: newline).location
+        let precedingID = text.attribute(DocxEditorAttribute.paragraphID, at: start, effectiveRange: nil) as? String
+        return precedingID != id.uuidString
+    }
+
     /// Reconciles the editor's paragraph sequence with the model. Existing IDs
     /// update their exact nodes; duplicated IDs created by Return become new
     /// paragraphs cloned from their list/style neighbor; missing IDs represent
@@ -68,29 +146,20 @@ enum DocxEditorProjection {
             uniquingKeysWith: { first, _ in first }
         )
         let projection = NSMutableAttributedString(attributedString: editorText)
+        let originalIndices = Dictionary(uniqueKeysWithValues: model.paragraphs.enumerated().map { ($1.id, $0) })
+        var nextOriginalIndex = 0
+        var changedIDs = Set<UUID>()
         var liveIndex = 0
 
-        for (sliceIndex, slice) in sourceSlices.enumerated() {
-            let requestedParagraph = slice.id.flatMap(model.paragraph(with:))
-            let requestedIndex = requestedParagraph.flatMap { requested in
-                model.paragraphs.firstIndex(where: { $0 === requested })
-            }
-
+        for slice in sourceSlices {
             let paragraph: DocxParagraph
             let isExistingParagraph: Bool
-            if let requestedParagraph,
-               let requestedIndex,
-               requestedIndex >= liveIndex {
-                let deletionCount = requestedIndex - liveIndex
-                for _ in 0..<deletionCount {
-                    guard model.paragraphs.indices.contains(liveIndex) else {
-                        throw DocxModelError.projectionMismatch(
-                            xmlParagraphs: model.paragraphs.count,
-                            renderedParagraphs: sourceSlices.count
-                        )
-                    }
-                    try model.deleteParagraph(model.paragraphs[liveIndex])
+            if let id = slice.id, let requestedIndex = originalIndices[id],
+               requestedIndex >= nextOriginalIndex, let requestedParagraph = model.paragraph(with: id) {
+                for _ in nextOriginalIndex..<requestedIndex {
+                    model.deleteParagraph(at: liveIndex)
                 }
+                nextOriginalIndex = requestedIndex + 1
                 guard model.paragraphs.indices.contains(liveIndex),
                       model.paragraphs[liveIndex] === requestedParagraph else {
                     throw DocxModelError.unknownParagraphID
@@ -100,9 +169,8 @@ enum DocxEditorProjection {
             } else {
                 let previous = liveIndex > 0 ? model.paragraphs[liveIndex - 1] : nil
                 let next = liveIndex < model.paragraphs.count ? model.paragraphs[liveIndex] : nil
-                let presentations = model.presentations()
                 let template = [previous, next].compactMap { $0 }.first(where: {
-                    (presentations[$0.id]?.listMarker != nil) == slice.isList
+                    model.isListParagraph($0) == slice.isList
                 })
                 guard let template else {
                     throw DocxModelError.unsupportedParagraphContainer
@@ -115,8 +183,16 @@ enum DocxEditorProjection {
                 isExistingParagraph = false
             }
 
+            if isExistingParagraph, let previousSlice = previousSlices[paragraph.id],
+               editorText.attributedSubstring(from: slice.paragraphRange).isEqual(
+                   to: previousText.attributedSubstring(from: previousSlice.paragraphRange)
+               ) {
+                liveIndex += 1
+                continue
+            }
+            changedIDs.insert(paragraph.id)
             if isExistingParagraph {
-                let currentlyBulleted = model.presentations()[paragraph.id]?.listMarker != nil
+                let currentlyBulleted = model.isListParagraph(paragraph)
                 if currentlyBulleted != slice.isList {
                     try model.setBulletedList(
                         of: paragraph,
@@ -157,15 +233,10 @@ enum DocxEditorProjection {
                 )
             }
             liveIndex += 1
-
-            // A paragraph ID may cover its terminating newline and therefore
-            // be inherited by the following paragraph. Reassigning it here is
-            // intentional; each slice must leave reconciliation with one ID.
-            _ = sliceIndex
         }
 
         while liveIndex < model.paragraphs.count {
-            try model.deleteParagraph(model.paragraphs[liveIndex])
+            model.deleteParagraph(at: liveIndex)
         }
 
         guard sourceSlices.count == model.paragraphs.count else {
@@ -174,17 +245,18 @@ enum DocxEditorProjection {
                 renderedParagraphs: sourceSlices.count
             )
         }
-        applyPresentationMetadata(to: projection, model: model)
+        applyPresentationMetadata(to: projection, model: model, changedIDs: changedIDs)
         return projection.copy() as! NSAttributedString
     }
 
-    static func paragraphSlices(in source: NSAttributedString) -> [ParagraphSlice] {
+    static func paragraphSlices(in source: NSAttributedString, within range: NSRange? = nil) -> [ParagraphSlice] {
         guard source.length > 0 else { return [] }
         let plainText = source.string as NSString
         var result: [ParagraphSlice] = []
-        var location = 0
+        var location = range?.location ?? 0
+        let end = range.map(NSMaxRange) ?? source.length
 
-        while location < source.length {
+        while location < end {
             var paragraphStart = 0
             var paragraphEnd = 0
             var contentsEnd = 0
@@ -282,103 +354,131 @@ enum DocxEditorProjection {
 
     private static func applyPresentationMetadata(
         to projection: NSMutableAttributedString,
-        model: DocxDocumentModel
+        model: DocxDocumentModel,
+        changedIDs: Set<UUID>? = nil
     ) {
         guard projection.length > 0 else { return }
-        let fullRange = NSRange(location: 0, length: projection.length)
-        projection.removeAttribute(DocxEditorAttribute.listMarker, range: fullRange)
-        projection.removeAttribute(DocxEditorAttribute.listMarkerIndent, range: fullRange)
-        projection.removeAttribute(DocxEditorAttribute.sectionRule, range: fullRange)
-
-        let slices = paragraphSlices(in: projection)
+        var slices = paragraphSlices(in: projection)
+        if model.paragraphs.count == slices.count + 1,
+           let trailingSlice = trailingEmptySlice(in: projection) {
+            slices.append(trailingSlice)
+        }
         let presentations = model.presentations()
-        for (slice, paragraph) in zip(slices, model.paragraphs) {
-            guard slice.paragraphRange.length > 0,
+        for (index, pair) in zip(slices, model.paragraphs).enumerated() {
+            let (slice, paragraph) = pair
+            var paragraphRange = slice.paragraphRange
+            // A terminal newline belongs to the separate empty paragraph when
+            // one exists. Do not reapply the preceding item's list formatting
+            // over it after the user ends the list.
+            if slices.indices.contains(index + 1) {
+                paragraphRange.length = min(
+                    paragraphRange.length,
+                    slices[index + 1].paragraphRange.location - paragraphRange.location
+                )
+            }
+            guard paragraphRange.length > 0,
                   let presentation = presentations[paragraph.id] else {
                 continue
             }
 
-            model.applyRunPresentation(
-                to: projection,
-                paragraph: paragraph,
-                in: slice.contentsRange
+            if let changedIDs, !changedIDs.contains(paragraph.id),
+               projection.attribute(DocxEditorAttribute.listMarker, at: paragraphRange.location,
+                                    effectiveRange: nil) as? String == presentation.listMarker {
+                continue
+            }
+            applyPresentation(presentation, to: projection, paragraph: paragraph, model: model,
+                              paragraphRange: paragraphRange, contentsRange: slice.contentsRange)
+        }
+    }
+
+    private static func applyPresentation(
+        _ presentation: DocxParagraphPresentation, to projection: NSMutableAttributedString,
+        paragraph: DocxParagraph, model: DocxDocumentModel,
+        paragraphRange: NSRange, contentsRange: NSRange
+    ) {
+        projection.removeAttribute(DocxEditorAttribute.listMarker, range: paragraphRange)
+        projection.removeAttribute(DocxEditorAttribute.listMarkerIndent, range: paragraphRange)
+        projection.removeAttribute(DocxEditorAttribute.sectionRule, range: paragraphRange)
+        model.applyRunPresentation(
+            to: projection,
+            paragraph: paragraph,
+            in: contentsRange
+        )
+
+        if presentation.spacingBefore != nil
+            || presentation.spacingAfter != nil
+            || presentation.lineSpacing != nil {
+            let existingStyle = projection.attribute(
+                .paragraphStyle,
+                at: paragraphRange.location,
+                effectiveRange: nil
+            ) as? NSParagraphStyle ?? NSParagraphStyle.default
+            let style = existingStyle.mutableCopy() as! NSMutableParagraphStyle
+            if let spacingBefore = presentation.spacingBefore {
+                style.paragraphSpacingBefore = spacingBefore
+            }
+            if let spacingAfter = presentation.spacingAfter {
+                style.paragraphSpacing = spacingAfter
+            }
+            if let lineSpacing = presentation.lineSpacing {
+                switch lineSpacing {
+                case let .multiple(value):
+                    style.lineHeightMultiple = value
+                    style.minimumLineHeight = 0
+                    style.maximumLineHeight = 0
+                case let .exact(value):
+                    style.lineHeightMultiple = 0
+                    style.minimumLineHeight = value
+                    style.maximumLineHeight = value
+                case let .atLeast(value):
+                    style.lineHeightMultiple = 0
+                    style.minimumLineHeight = value
+                    style.maximumLineHeight = 0
+                }
+            }
+            projection.addAttribute(
+                .paragraphStyle,
+                value: style,
+                range: paragraphRange
             )
+        }
 
-            if presentation.spacingBefore != nil
-                || presentation.spacingAfter != nil
-                || presentation.lineSpacing != nil {
-                let existingStyle = projection.attribute(
-                    .paragraphStyle,
-                    at: slice.paragraphRange.location,
-                    effectiveRange: nil
-                ) as? NSParagraphStyle ?? NSParagraphStyle.default
-                let style = existingStyle.mutableCopy() as! NSMutableParagraphStyle
-                if let spacingBefore = presentation.spacingBefore {
-                    style.paragraphSpacingBefore = spacingBefore
-                }
-                if let spacingAfter = presentation.spacingAfter {
-                    style.paragraphSpacing = spacingAfter
-                }
-                if let lineSpacing = presentation.lineSpacing {
-                    switch lineSpacing {
-                    case let .multiple(value):
-                        style.lineHeightMultiple = value
-                        style.minimumLineHeight = 0
-                        style.maximumLineHeight = 0
-                    case let .exact(value):
-                        style.lineHeightMultiple = 0
-                        style.minimumLineHeight = value
-                        style.maximumLineHeight = value
-                    case let .atLeast(value):
-                        style.lineHeightMultiple = 0
-                        style.minimumLineHeight = value
-                        style.maximumLineHeight = 0
-                    }
-                }
-                projection.addAttribute(
-                    .paragraphStyle,
-                    value: style,
-                    range: slice.paragraphRange
-                )
-            }
+        if !presentation.hasExplicitUnderline {
+            removeImportedUnderline(
+                from: projection,
+                in: contentsRange
+            )
+        }
 
-            if !presentation.hasExplicitUnderline {
-                removeImportedUnderline(
-                    from: projection,
-                    in: slice.contentsRange
-                )
-            }
+        if let marker = presentation.listMarker,
+           let markerIndent = presentation.markerIndent,
+           let textIndent = presentation.textIndent {
+            let existingStyle = projection.attribute(
+                .paragraphStyle,
+                at: paragraphRange.location,
+                effectiveRange: nil
+            ) as? NSParagraphStyle ?? NSParagraphStyle.default
+            let style = existingStyle.mutableCopy() as! NSMutableParagraphStyle
+            style.firstLineHeadIndent = textIndent
+            style.headIndent = textIndent
+            style.tabStops = style.tabStops.filter { abs($0.location - textIndent) > 0.5 }
+            style.addTabStop(NSTextTab(textAlignment: .left, location: textIndent))
+            projection.addAttribute(.paragraphStyle, value: style, range: paragraphRange)
+            projection.addAttribute(DocxEditorAttribute.listMarker, value: marker, range: paragraphRange)
+            projection.addAttribute(
+                DocxEditorAttribute.listMarkerIndent,
+                value: NSNumber(value: Double(markerIndent)),
+                range: paragraphRange
+            )
+        }
 
-            if let marker = presentation.listMarker,
-               let markerIndent = presentation.markerIndent,
-               let textIndent = presentation.textIndent {
-                let existingStyle = projection.attribute(
-                    .paragraphStyle,
-                    at: slice.paragraphRange.location,
-                    effectiveRange: nil
-                ) as? NSParagraphStyle ?? NSParagraphStyle.default
-                let style = existingStyle.mutableCopy() as! NSMutableParagraphStyle
-                style.firstLineHeadIndent = textIndent
-                style.headIndent = textIndent
-                style.tabStops = style.tabStops.filter { abs($0.location - textIndent) > 0.5 }
-                style.addTabStop(NSTextTab(textAlignment: .left, location: textIndent))
-                projection.addAttribute(.paragraphStyle, value: style, range: slice.paragraphRange)
-                projection.addAttribute(DocxEditorAttribute.listMarker, value: marker, range: slice.paragraphRange)
-                projection.addAttribute(
-                    DocxEditorAttribute.listMarkerIndent,
-                    value: NSNumber(value: Double(markerIndent)),
-                    range: slice.paragraphRange
-                )
-            }
-
-            if let color = presentation.sectionRuleColor,
-               slice.contentsRange.length > 0 {
-                projection.addAttribute(
-                    DocxEditorAttribute.sectionRule,
-                    value: color,
-                    range: slice.contentsRange
-                )
-            }
+        if let color = presentation.sectionRuleColor,
+           contentsRange.length > 0 {
+            projection.addAttribute(
+                DocxEditorAttribute.sectionRule,
+                value: color,
+                range: contentsRange
+            )
         }
     }
 

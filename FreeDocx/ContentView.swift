@@ -13,10 +13,6 @@ struct ContentView: View {
     @ObservedObject var document: FreeDocxDocument
     @StateObject private var editorController = RichTextEditorController()
 
-    private var wordCount: Int {
-        document.attributedText.string.split { $0.isWhitespace || $0.isNewline }.count
-    }
-
     var body: some View {
         VStack(spacing: 0) {
             FormattingToolbar(controller: editorController)
@@ -25,13 +21,14 @@ struct ContentView: View {
             RichTextEditor(
                 text: $document.attributedText,
                 pageLayout: document.pageLayout,
-                controller: editorController
+                controller: editorController,
+                validateEdit: document.canApplyEditorChanges
             )
 
             Divider()
             HStack(spacing: 12) {
                 Spacer()
-                Text("\(wordCount) \(wordCount == 1 ? "word" : "words")")
+                Text("\(document.wordCount) \(document.wordCount == 1 ? "word" : "words")")
                 Text("\(document.attributedText.length) characters")
 
                 Divider()
@@ -59,6 +56,15 @@ struct ContentView: View {
             .background(.bar)
         }
         .frame(minWidth: 620, minHeight: 480)
+        .alert("This edit isn’t supported yet", isPresented: Binding(
+            get: { document.editRejectionMessage != nil },
+            set: { if !$0 { document.editRejectionMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { document.editRejectionMessage = nil }
+        } message: {
+            Text((document.editRejectionMessage ?? "")
+                + " The edit was not applied. Your earlier edits can still be saved.")
+        }
     }
 }
 
@@ -413,9 +419,10 @@ private struct RichTextEditor: NSViewRepresentable {
     @Binding var text: NSAttributedString
     let pageLayout: DocumentPageLayout
     let controller: RichTextEditorController
+    let validateEdit: (NSAttributedString, [NSRange], [String]?) -> Bool
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text)
+        Coordinator(text: $text, validateEdit: validateEdit)
     }
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -457,7 +464,7 @@ private struct RichTextEditor: NSViewRepresentable {
         // SwiftUI can reuse this representable when an untitled document is
         // replaced by one opened from the app. Keep the coordinator connected
         // to the current document rather than its original binding.
-        context.coordinator.updateBinding($text)
+        context.coordinator.updateBinding($text, validateEdit: validateEdit)
 
         guard let textView = scrollView.documentView as? PagedTextView else { return }
         textView.apply(pageLayout: pageLayout)
@@ -480,14 +487,35 @@ private struct RichTextEditor: NSViewRepresentable {
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         @Binding private var text: NSAttributedString
+        private var validateEdit: (NSAttributedString, [NSRange], [String]?) -> Bool
         var isApplyingExternalUpdate = false
 
-        init(text: Binding<NSAttributedString>) {
+        init(
+            text: Binding<NSAttributedString>,
+            validateEdit: @escaping (NSAttributedString, [NSRange], [String]?) -> Bool
+        ) {
             _text = text
+            self.validateEdit = validateEdit
         }
 
-        func updateBinding(_ text: Binding<NSAttributedString>) {
+        func updateBinding(
+            _ text: Binding<NSAttributedString>,
+            validateEdit: @escaping (NSAttributedString, [NSRange], [String]?) -> Bool
+        ) {
             _text = text
+            self.validateEdit = validateEdit
+        }
+
+        func textView(
+            _ textView: NSTextView,
+            shouldChangeTextInRanges affectedRanges: [NSValue],
+            replacementStrings: [String]?
+        ) -> Bool {
+            isApplyingExternalUpdate || validateEdit(
+                textView.attributedString(),
+                affectedRanges.map(\.rangeValue),
+                replacementStrings
+            )
         }
 
         func textDidChange(_ notification: Notification) {
@@ -498,11 +526,20 @@ private struct RichTextEditor: NSViewRepresentable {
             }
 
             text = textView.attributedString().copy() as! NSAttributedString
-            if let pagedTextView = textView as? PagedTextView {
-                DispatchQueue.main.async {
-                    pagedTextView.repaginate()
-                }
+            // Reconcile stable paragraph metadata immediately, and restore the
+            // accepted projection if a rich edit failed the final validation.
+            if !textView.attributedString().isEqual(to: text) {
+                let selection = textView.selectedRange()
+                isApplyingExternalUpdate = true
+                textView.textStorage?.setAttributedString(text)
+                let location = min(selection.location, text.length)
+                textView.setSelectedRange(NSRange(
+                    location: location,
+                    length: min(selection.length, text.length - location)
+                ))
+                isApplyingExternalUpdate = false
             }
+            (textView as? PagedTextView)?.schedulePagination()
         }
     }
 }

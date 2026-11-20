@@ -6,17 +6,6 @@
 import AppKit
 import Foundation
 
-enum DocxDocumentSessionError: LocalizedError {
-    case pendingEdit(Error)
-
-    var errorDescription: String? {
-        switch self {
-        case let .pendingEdit(error):
-            return "This edit could not be represented safely in the Word document: \(error.localizedDescription)"
-        }
-    }
-}
-
 /// Reference-owned document state. Model changes are applied transactionally:
 /// a failed editor reconciliation never mutates the last valid OOXML graph.
 final class DocxDocumentSession {
@@ -25,6 +14,17 @@ final class DocxDocumentSession {
     private(set) var attributedText: NSAttributedString
     private(set) var pageLayout: DocumentPageLayout
     private(set) var pendingError: Error?
+    private enum ModelEdit {
+        case paragraphs([DocxParagraph])
+        case document(DocxDocumentModel)
+    }
+    private struct PreparedEdit {
+        let proposed: NSAttributedString
+        let normalized: NSAttributedString
+        let change: ModelEdit
+    }
+    private var preparedEdit: PreparedEdit?
+    private var affectedRange: NSRange?
 
     init(data: Data) throws {
         let package = try DocxPackage(data: data)
@@ -51,27 +51,108 @@ final class DocxDocumentSession {
         try self.init(data: Self.blankDocumentData())
     }
 
-    func acceptEditorText(_ editorText: NSAttributedString) {
+    /// Validate native replacements before TextKit changes its text or undo history.
+    func validateEditorChanges(
+        in editorText: NSAttributedString,
+        ranges: [NSRange],
+        replacementStrings: [String]?
+    ) throws {
+        preparedEdit = nil
+        affectedRange = nil
+        guard ranges.allSatisfy({
+            $0.location >= 0 && $0.length >= 0 && $0.location <= editorText.length
+                && $0.length <= editorText.length - $0.location
+        }) else {
+            throw DocxModelError.unknownParagraphID
+        }
+        let range = ranges.first.map { first in ranges.dropFirst().reduce(first, NSUnionRange) }
+        if let replacementStrings {
+            guard ranges.count == replacementStrings.count else {
+                throw DocxModelError.unknownParagraphID
+            }
+            let proposed = NSMutableAttributedString(attributedString: editorText)
+            for (range, replacement) in zip(ranges, replacementStrings).reversed() {
+                proposed.replaceCharacters(in: range, with: replacement)
+            }
+            preparedEdit = try prepare(proposed, range: range)
+        } else {
+            // The replacement attributes are not available until TextKit applies
+            // them. Protect paragraphs whose runs cannot be rewritten safely.
+            for range in ranges where editorText.length > 0 {
+                let affectedRange = NSRange(
+                    location: min(range.location, editorText.length - 1),
+                    length: max(range.length, 1)
+                )
+                var validationError: Error?
+                editorText.enumerateAttribute(
+                    DocxEditorAttribute.paragraphID,
+                    in: affectedRange
+                ) { value, _, stop in
+                    guard let value = value as? String,
+                          let id = UUID(uuidString: value),
+                          let paragraph = model.paragraph(with: id) else {
+                        validationError = DocxModelError.unknownParagraphID
+                        stop.pointee = true
+                        return
+                    }
+                    do {
+                        try model.validateRunEditing(of: paragraph)
+                    } catch {
+                        validationError = error
+                        stop.pointee = true
+                    }
+                }
+                if let validationError { throw validationError }
+            }
+        }
+        affectedRange = range
+    }
+
+    private func prepare(_ text: NSAttributedString, range: NSRange?) throws -> PreparedEdit {
+        let snapshot = text.copy() as! NSAttributedString
+        if let local = try DocxEditorProjection.prepareParagraphEdits(
+            editorText: snapshot, previousText: attributedText, affectedRange: range, model: model
+        ) {
+            return PreparedEdit(proposed: snapshot, normalized: local.text, change: .paragraphs(local.paragraphs))
+        }
+        let candidate = try model.transactionalCopy()
+        let normalized = try DocxEditorProjection.reconcile(
+            editorText: snapshot, previousText: attributedText, model: candidate
+        )
+        return PreparedEdit(proposed: snapshot, normalized: normalized, change: .document(candidate))
+    }
+
+    @discardableResult
+    func acceptEditorText(_ editorText: NSAttributedString) -> Bool {
+        defer {
+            preparedEdit = nil
+            affectedRange = nil
+        }
         do {
-            let candidate = try model.transactionalCopy()
-            let normalized = try DocxEditorProjection.reconcile(
-                editorText: editorText,
-                previousText: attributedText,
-                model: candidate
-            )
-            model = candidate
-            attributedText = normalized
+            let edit: PreparedEdit
+            if let preparedEdit, preparedEdit.proposed.isEqual(to: editorText) {
+                edit = preparedEdit
+            } else {
+                edit = try prepare(editorText, range: affectedRange)
+            }
+            switch edit.change {
+            case let .paragraphs(replacements):
+                try model.commitParagraphs(replacements)
+            case let .document(candidate):
+                model = candidate
+            }
+            attributedText = edit.normalized
             pendingError = nil
+            return true
         } catch {
-            attributedText = editorText
+            // Keep both the model and its projection at the last valid edit.
+            // A rejected edit must never prevent saving earlier accepted work.
             pendingError = error
+            return false
         }
     }
 
     func serializedData() throws -> Data {
-        if let pendingError {
-            throw DocxDocumentSessionError.pendingEdit(pendingError)
-        }
         var outputPackage = package
         if model.isDirty {
             try outputPackage.replacePart(

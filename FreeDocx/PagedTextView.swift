@@ -64,6 +64,7 @@ final class PagedTextView: NSTextView {
     private(set) var pageLayout: DocumentPageLayout
     private(set) var pageCount = 1
     private var viewportWidth: CGFloat = 0
+    private var paginationPending = false
 
     private var pagedTextContainer: PagedTextContainer {
         textContainer as! PagedTextContainer
@@ -128,7 +129,17 @@ final class PagedTextView: NSTextView {
         updateFrameSize()
     }
 
+    func schedulePagination() {
+        guard !paginationPending else { return }
+        paginationPending = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.paginationPending else { return }
+            self.repaginate()
+        }
+    }
+
     func repaginate() {
+        paginationPending = false
         guard let layoutManager, let textContainer else { return }
         layoutManager.ensureLayout(for: textContainer)
         let usedHeight = layoutManager.usedRect(for: textContainer).maxY
@@ -143,7 +154,10 @@ final class PagedTextView: NSTextView {
         }
     }
 
-    override func draw(_ dirtyRect: NSRect) {
+    override func draw(_ invalidatedRect: NSRect) {
+        let dirtyRect = NSGraphicsContext.current?.isDrawingToScreen == true
+            ? invalidatedRect.intersection(visibleRect) : invalidatedRect
+        guard !dirtyRect.isEmpty else { return }
         NSColor(calibratedWhite: 0.86, alpha: 1).setFill()
         dirtyRect.fill()
 
@@ -183,20 +197,37 @@ final class PagedTextView: NSTextView {
         }
 
         super.draw(dirtyRect)
-        drawListMarkers(in: dirtyRect)
-        drawSectionRules(in: dirtyRect)
-    }
-
-    private func drawListMarkers(in dirtyRect: NSRect) {
         guard let layoutManager, let textContainer, let textStorage, textStorage.length > 0 else {
             return
         }
+        // A marker or border can be invalidated in the margin alone. Use the
+        // full line width and include the border just below its last glyph.
+        let textOrigin = textContainerOrigin
+        let band = NSRect(x: 0, y: dirtyRect.minY - textOrigin.y - 2,
+                          width: textContainer.size.width, height: dirtyRect.height + 4)
+        let glyphs = layoutManager.glyphRange(forBoundingRect: band, in: textContainer)
+        if glyphs.length > 0 {
+            let characters = layoutManager.characterRange(forGlyphRange: glyphs, actualGlyphRange: nil)
+            let paragraphs = (textStorage.string as NSString).paragraphRange(for: characters)
+            drawListMarkers(in: dirtyRect, paragraphs: paragraphs)
+            drawSectionRules(in: dirtyRect, paragraphs: paragraphs)
+        }
+        if lastVisiblePage == pageCount - 1, layoutManager.extraLineFragmentTextContainer != nil,
+           layoutManager.extraLineFragmentRect.maxY >= band.minY,
+           layoutManager.extraLineFragmentRect.minY <= band.maxY {
+            drawTrailingEmptyListMarker(textOrigin: textOrigin, dirtyRect: dirtyRect)
+        }
+    }
 
-        layoutManager.ensureLayout(for: textContainer)
+    private func drawListMarkers(in dirtyRect: NSRect, paragraphs: NSRange) {
+        guard let layoutManager, let textStorage else {
+            return
+        }
+
         let textOrigin = textContainerOrigin
         let plainText = textStorage.string as NSString
-        var location = 0
-        while location < textStorage.length {
+        var location = paragraphs.location
+        while location < NSMaxRange(paragraphs) {
             var paragraphStart = 0
             var paragraphEnd = 0
             var contentsEnd = 0
@@ -237,11 +268,6 @@ final class PagedTextView: NSTextView {
             )
             location = max(paragraphEnd, location + 1)
         }
-
-        drawTrailingEmptyListMarker(
-            textOrigin: textOrigin,
-            dirtyRect: dirtyRect
-        )
     }
 
     private func drawTrailingEmptyListMarker(
@@ -347,19 +373,17 @@ final class PagedTextView: NSTextView {
         }
     }
 
-    private func drawSectionRules(in dirtyRect: NSRect) {
-        guard let layoutManager, let textContainer, textStorage?.length ?? 0 > 0 else {
+    private func drawSectionRules(in dirtyRect: NSRect, paragraphs: NSRange) {
+        guard let layoutManager, let textContainer else {
             return
         }
 
-        layoutManager.ensureLayout(for: textContainer)
         let textOrigin = textContainerOrigin
         let contentWidth = textContainer.size.width
-        let fullRange = NSRange(location: 0, length: textStorage?.length ?? 0)
 
         textStorage?.enumerateAttribute(
             DocxEditorAttribute.sectionRule,
-            in: fullRange
+            in: paragraphs
         ) { value, characterRange, _ in
             guard let color = value as? NSColor, characterRange.length > 0 else {
                 return

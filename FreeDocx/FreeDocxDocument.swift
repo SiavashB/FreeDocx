@@ -24,13 +24,20 @@ final class FreeDocxDocument: ReferenceFileDocument {
     @Published var attributedText: NSAttributedString {
         didSet {
             guard !isApplyingProjection else { return }
-            session.acceptEditorText(attributedText)
+            if !session.acceptEditorText(attributedText) {
+                editRejectionMessage = session.pendingError?.localizedDescription
+            }
+            if oldValue.string != session.attributedText.string {
+                wordCount = Self.countWords(in: session.attributedText.string)
+            }
             guard !attributedText.isEqual(to: session.attributedText) else { return }
             isApplyingProjection = true
             attributedText = session.attributedText
             isApplyingProjection = false
         }
     }
+    @Published var editRejectionMessage: String?
+    private(set) var wordCount: Int
     let pageLayout: DocumentPageLayout
 
     private let session: DocxDocumentSession
@@ -40,6 +47,7 @@ final class FreeDocxDocument: ReferenceFileDocument {
         FreeDocxLifecycleState.documentDidStartOpening()
         let session = try! DocxDocumentSession()
         self.session = session
+        wordCount = Self.countWords(in: session.attributedText.string)
         attributedText = session.attributedText
         pageLayout = session.pageLayout
     }
@@ -56,6 +64,7 @@ final class FreeDocxDocument: ReferenceFileDocument {
         do {
             let session = try DocxDocumentSession(data: data)
             self.session = session
+            wordCount = Self.countWords(in: session.attributedText.string)
             attributedText = session.attributedText
             pageLayout = session.pageLayout
         } catch {
@@ -67,6 +76,17 @@ final class FreeDocxDocument: ReferenceFileDocument {
                 ]
             )
         }
+    }
+
+    private static func countWords(in text: String) -> Int {
+        var count = 0
+        var inWord = false
+        for character in text {
+            let startsOrContinuesWord = !character.isWhitespace && !character.isNewline
+            if startsOrContinuesWord && !inWord { count += 1 }
+            inWord = startsOrContinuesWord
+        }
+        return count
     }
 
     func snapshot(contentType: UTType) throws -> Data {
@@ -91,6 +111,24 @@ final class FreeDocxDocument: ReferenceFileDocument {
                     NSLocalizedDescriptionKey: error.localizedDescription
                 ]
             )
+        }
+    }
+
+    func canApplyEditorChanges(
+        to editorText: NSAttributedString,
+        ranges: [NSRange],
+        replacementStrings: [String]?
+    ) -> Bool {
+        do {
+            try session.validateEditorChanges(
+                in: editorText,
+                ranges: ranges,
+                replacementStrings: replacementStrings
+            )
+            return true
+        } catch {
+            editRejectionMessage = error.localizedDescription
+            return false
         }
     }
 }
