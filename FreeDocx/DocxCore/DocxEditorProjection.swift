@@ -17,6 +17,58 @@ enum DocxEditorProjection {
         let isList: Bool
     }
 
+    /// TextKit may give the first typed character only its native typing
+    /// attributes. Carry the destination paragraph's identity and list style
+    /// from the original edit range, leaving the typed run's font and color alone.
+    struct ParagraphInsertion {
+        let insertedRange: NSRange
+        private let attributes: [NSAttributedString.Key: Any]
+        private static let keys: [NSAttributedString.Key] = [
+            DocxEditorAttribute.paragraphID, DocxEditorAttribute.listMarker,
+            DocxEditorAttribute.listMarkerIndent, .paragraphStyle
+        ]
+
+        init?(in original: NSAttributedString, range: NSRange, replacement: String, offset: Int) {
+            guard original.length > 0, !replacement.isEmpty else { return nil }
+            let string = original.string as NSString
+            var start = 0, contentsEnd = 0
+            string.getParagraphStart(&start, end: nil, contentsEnd: &contentsEnd,
+                                     for: NSRange(location: range.location, length: 0))
+            let isReturn = replacement == "\n" || replacement == "\r" || replacement == "\r\n"
+            let isFirstText = start == range.location && replacement.rangeOfCharacter(from: .newlines) == nil
+            guard (isReturn || isFirstText), NSMaxRange(range) <= contentsEnd else { return nil }
+            let source = min(start, original.length - 1)
+            var attributes = original.attributes(at: source, effectiveRange: nil)
+            guard attributes[DocxEditorAttribute.paragraphID] != nil else { return nil }
+            // At EOF the newline carries the trailing paragraph's ID, but
+            // AppKit can give it the indent of the preceding list item.
+            if start == original.length, attributes[DocxEditorAttribute.listMarker] == nil,
+               let style = attributes[.paragraphStyle] as? NSParagraphStyle,
+               style.headIndent != 0 || style.firstLineHeadIndent != 0 {
+                let preceding = string.paragraphRange(for: NSRange(location: source, length: 1)).location
+                if original.attribute(DocxEditorAttribute.listMarker, at: preceding, effectiveRange: nil) != nil {
+                    let plain = style.mutableCopy() as! NSMutableParagraphStyle
+                    plain.headIndent = 0
+                    plain.firstLineHeadIndent = 0
+                    plain.tabStops = plain.tabStops.filter { abs($0.location - style.headIndent) > 0.5 }
+                    attributes[.paragraphStyle] = plain
+                }
+            }
+            self.attributes = attributes
+            insertedRange = NSRange(location: range.location + offset, length: replacement.utf16.count)
+        }
+
+        func apply(to text: NSMutableAttributedString) {
+            for key in Self.keys {
+                if let value = attributes[key] {
+                    text.addAttribute(key, value: value, range: insertedRange)
+                } else {
+                    text.removeAttribute(key, range: insertedRange)
+                }
+            }
+        }
+    }
+
     static func initial(
         importedText: NSAttributedString,
         model: DocxDocumentModel
@@ -128,7 +180,25 @@ enum DocxEditorProjection {
         previousText: NSAttributedString,
         model: DocxDocumentModel
     ) throws -> NSAttributedString {
-        var sourceSlices = paragraphSlices(in: editorText)
+        if editorText.length == 0 {
+            // An empty text storage cannot carry a paragraph ID. Retain the
+            // first selected Word paragraph as the insertion point for typing.
+            guard previousText.length > 0 else { return editorText }
+            guard let value = previousText.attribute(DocxEditorAttribute.paragraphID, at: 0,
+                                                     effectiveRange: nil) as? String,
+                  let id = UUID(uuidString: value) else {
+                throw DocxModelError.unknownParagraphID
+            }
+            try model.clearBody(keeping: id)
+            return editorText
+        }
+        let projection = NSMutableAttributedString(attributedString: editorText)
+        if previousText.length == 0, model.paragraphs.count == 1,
+           let anchor = model.paragraphs.first {
+            let first = (editorText.string as NSString).paragraphRange(for: NSRange(location: 0, length: 0))
+            projection.addAttribute(DocxEditorAttribute.paragraphID, value: anchor.id.uuidString, range: first)
+        }
+        var sourceSlices = paragraphSlices(in: projection)
         let editorEndsInNewline = endsInNewline(editorText.string)
         let previousEndsInNewline = endsInNewline(previousText.string)
         let addedAmbiguousTrailingParagraph = editorEndsInNewline
@@ -136,7 +206,9 @@ enum DocxEditorProjection {
             && editorText.string != previousText.string
         let modelAlreadyHasTrailingParagraph = model.paragraphs.count == sourceSlices.count + 1
         if (addedAmbiguousTrailingParagraph || modelAlreadyHasTrailingParagraph),
-           let trailingSlice = trailingEmptySlice(in: editorText) {
+           let trailingSlice = trailingEmptySlice(
+               in: editorText, continuingParagraph: addedAmbiguousTrailingParagraph
+           ) {
             sourceSlices.append(trailingSlice)
         }
         let previousSlices = Dictionary(
@@ -145,7 +217,6 @@ enum DocxEditorProjection {
             },
             uniquingKeysWith: { first, _ in first }
         )
-        let projection = NSMutableAttributedString(attributedString: editorText)
         let originalIndices = Dictionary(uniqueKeysWithValues: model.paragraphs.enumerated().map { ($1.id, $0) })
         var nextOriginalIndex = 0
         var changedIDs = Set<UUID>()
@@ -169,10 +240,11 @@ enum DocxEditorProjection {
             } else {
                 let previous = liveIndex > 0 ? model.paragraphs[liveIndex - 1] : nil
                 let next = liveIndex < model.paragraphs.count ? model.paragraphs[liveIndex] : nil
-                let template = [previous, next].compactMap { $0 }.first(where: {
+                let neighbors = [previous, next].compactMap { $0 }
+                let matchingTemplate = neighbors.first(where: {
                     model.isListParagraph($0) == slice.isList
                 })
-                guard let template else {
+                guard let template = matchingTemplate ?? neighbors.first else {
                     throw DocxModelError.unsupportedParagraphContainer
                 }
                 paragraph = try model.insertParagraph(
@@ -191,14 +263,8 @@ enum DocxEditorProjection {
                 continue
             }
             changedIDs.insert(paragraph.id)
-            if isExistingParagraph {
-                let currentlyBulleted = model.isListParagraph(paragraph)
-                if currentlyBulleted != slice.isList {
-                    try model.setBulletedList(
-                        of: paragraph,
-                        enabled: slice.isList
-                    )
-                }
+            if model.isListParagraph(paragraph) != slice.isList {
+                try model.setBulletedList(of: paragraph, enabled: slice.isList)
             }
 
             let currentContents = editorText.attributedSubstring(from: slice.contentsRange)
@@ -307,7 +373,7 @@ enum DocxEditorProjection {
     /// for a new empty paragraph. Reconciliation opts into this extra slice
     /// only when an edit created it or the OOXML model already contains it.
     private static func trailingEmptySlice(
-        in source: NSAttributedString
+        in source: NSAttributedString, continuingParagraph: Bool = false
     ) -> ParagraphSlice? {
         guard source.length > 0, endsInNewline(source.string) else { return nil }
         let plainText = source.string as NSString
@@ -322,7 +388,11 @@ enum DocxEditorProjection {
         )
         guard contentsEnd > paragraphStart else { return nil }
 
-        let attributeLocation = source.length - 1
+        // A newly inserted terminal newline can carry the paragraph ID but
+        // lose its list marker in TextKit. Continue the item the user split.
+        // An existing trailing item has its own identity on the newline.
+        let newlineLocation = source.length - 1
+        let attributeLocation = continuingParagraph ? paragraphStart : newlineLocation
         let idValue = source.attribute(
             DocxEditorAttribute.paragraphID,
             at: attributeLocation,
@@ -339,7 +409,7 @@ enum DocxEditorProjection {
             effectiveRange: nil
         ) != nil
         return ParagraphSlice(
-            paragraphRange: NSRange(location: attributeLocation, length: 1),
+            paragraphRange: NSRange(location: newlineLocation, length: 1),
             contentsRange: NSRange(location: source.length, length: 0),
             text: "",
             id: idValue.flatMap(UUID.init(uuidString:)),

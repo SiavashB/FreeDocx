@@ -173,14 +173,33 @@ final class RichTextEditorController: ObservableObject {
 
     func toggleBulletedList() {
         withEditor { textView in
-            guard let textStorage = textView.textStorage,
-                  textStorage.length > 0 else {
-                return
+            guard let textStorage = textView.textStorage else { return }
+            let startedEmpty = textStorage.length == 0
+            if startedEmpty {
+                // Match the editable empty paragraph supplied by the Word
+                // importer, so its bullet is visible before the first key.
+                let caret = NSRange(location: 0, length: 0)
+                textView.insertText("\n", replacementRange: caret)
+                guard textStorage.length > 0 else { return }
+                textView.setSelectedRange(caret)
             }
             let ranges = selectedParagraphRanges(in: textView)
             guard !ranges.isEmpty else { return }
 
-            let allBulleted = allParagraphsHaveListMarkers(ranges, in: textStorage)
+            // AppKit's importer adds a terminal newline. If the caret is
+            // beyond it but the button targets the preceding Word paragraph,
+            // put subsequent typing in the paragraph that was just formatted.
+            if textView.selectedRange() == NSRange(location: textStorage.length, length: 0) {
+                var start = 0, contentsEnd = 0
+                (textStorage.string as NSString).getParagraphStart(
+                    &start, end: nil, contentsEnd: &contentsEnd,
+                    for: NSRange(location: textStorage.length - 1, length: 1)
+                )
+                if ranges.last?.location == start, contentsEnd < textStorage.length {
+                    textView.setSelectedRange(NSRange(location: contentsEnd, length: 0))
+                }
+            }
+            let allBulleted = !startedEmpty && allParagraphsHaveListMarkers(ranges, in: textStorage)
             let combinedRange = NSUnionRange(ranges.first!, ranges.last!)
             guard textView.shouldChangeText(
                 in: combinedRange,
@@ -484,6 +503,9 @@ private struct RichTextEditor: NSViewRepresentable {
         textView.textColor = .black
         textView.insertionPointColor = .black
         textView.textStorage?.setAttributedString(text)
+        if text.string == "\n" {
+            textView.setSelectedRange(NSRange(location: 0, length: 0))
+        }
         textView.repaginate()
 
         scrollView.hasVerticalScroller = true

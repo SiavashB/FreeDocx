@@ -505,6 +505,19 @@ final class DocxDocumentModel {
         isDirty = true
     }
 
+    func clearBody(keeping id: UUID) throws {
+        guard let anchor = paragraph(with: id),
+              paragraphs.allSatisfy({ $0.element.parent?.localName == "body" }) else {
+            throw DocxModelError.unsupportedParagraphContainer
+        }
+        for paragraph in paragraphs { try validateRunEditing(of: paragraph) }
+        try applyRunFormatting(to: anchor, from: NSAttributedString(string: ""))
+        if isListParagraph(anchor) { try setBulletedList(of: anchor, enabled: false) }
+        for index in paragraphs.indices.reversed() where paragraphs[index] !== anchor {
+            deleteParagraph(at: index)
+        }
+    }
+
     func documentXMLData() -> Data {
         xmlDocument.xmlData(options: [.nodePreserveAll])
     }

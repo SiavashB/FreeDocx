@@ -25,6 +25,8 @@ final class DocxDocumentSession {
     }
     private var preparedEdit: PreparedEdit?
     private var affectedRange: NSRange?
+    private var paragraphInsertions: [DocxEditorProjection.ParagraphInsertion] = []
+    private var clearedDocument: (text: NSAttributedString, model: DocxDocumentModel)?
 
     init(data: Data) throws {
         let package = try DocxPackage(data: data)
@@ -60,10 +62,11 @@ final class DocxDocumentSession {
     ) throws {
         preparedEdit = nil
         affectedRange = nil
+        paragraphInsertions.removeAll()
         guard ranges.allSatisfy({
             $0.location >= 0 && $0.length >= 0 && $0.location <= editorText.length
                 && $0.length <= editorText.length - $0.location
-        }) else {
+        }), zip(ranges, ranges.dropFirst()).allSatisfy({ NSMaxRange($0.0) <= $0.1.location }) else {
             throw DocxModelError.unknownParagraphID
         }
         let range = ranges.first.map { first in ranges.dropFirst().reduce(first, NSUnionRange) }
@@ -72,10 +75,22 @@ final class DocxDocumentSession {
                 throw DocxModelError.unknownParagraphID
             }
             let proposed = NSMutableAttributedString(attributedString: editorText)
+            var insertions: [DocxEditorProjection.ParagraphInsertion] = []
+            var offset = 0
+            for (range, replacement) in zip(ranges, replacementStrings) {
+                if let insertion = DocxEditorProjection.ParagraphInsertion(
+                    in: editorText, range: range, replacement: replacement, offset: offset
+                ) {
+                    insertions.append(insertion)
+                }
+                offset += replacement.utf16.count - range.length
+            }
             for (range, replacement) in zip(ranges, replacementStrings).reversed() {
                 proposed.replaceCharacters(in: range, with: replacement)
             }
+            for insertion in insertions { insertion.apply(to: proposed) }
             preparedEdit = try prepare(proposed, range: range)
+            paragraphInsertions = insertions
         } else {
             // The replacement attributes are not available until TextKit applies
             // them. Protect paragraphs whose runs cannot be rewritten safely.
@@ -111,6 +126,27 @@ final class DocxDocumentSession {
 
     private func prepare(_ text: NSAttributedString, range: NSRange?) throws -> PreparedEdit {
         let snapshot = text.copy() as! NSAttributedString
+        // TextKit restores the original attributed paragraphs on Undo. Reuse
+        // their Word nodes, including properties not represented by TextKit.
+        if attributedText.length == 0, let clearedDocument,
+           snapshot.length == clearedDocument.text.length,
+           (snapshot.string as NSString).isEqual(to: clearedDocument.text.string) {
+            if snapshot.isEqual(to: clearedDocument.text) {
+                return PreparedEdit(proposed: snapshot, normalized: clearedDocument.text,
+                                    change: .document(clearedDocument.model))
+            }
+            let restored = DocxEditorProjection.paragraphSlices(in: snapshot)
+            let original = DocxEditorProjection.paragraphSlices(in: clearedDocument.text)
+            if restored.count == original.count, zip(restored, original).allSatisfy({
+                $0.0.id != nil && $0.0.id == $0.1.id
+            }) {
+                let candidate = try clearedDocument.model.transactionalCopy()
+                let normalized = try DocxEditorProjection.reconcile(
+                    editorText: snapshot, previousText: clearedDocument.text, model: candidate
+                )
+                return PreparedEdit(proposed: snapshot, normalized: normalized, change: .document(candidate))
+            }
+        }
         if let local = try DocxEditorProjection.prepareParagraphEdits(
             editorText: snapshot, previousText: attributedText, affectedRange: range, model: model
         ) {
@@ -128,18 +164,32 @@ final class DocxDocumentSession {
         defer {
             preparedEdit = nil
             affectedRange = nil
+            paragraphInsertions.removeAll()
         }
         do {
+            var actual = editorText
+            if !paragraphInsertions.isEmpty, let preparedEdit,
+               preparedEdit.proposed.length == editorText.length,
+               (preparedEdit.proposed.string as NSString).isEqual(to: editorText.string) {
+                let repaired = NSMutableAttributedString(attributedString: editorText)
+                for insertion in paragraphInsertions { insertion.apply(to: repaired) }
+                actual = repaired
+            }
             let edit: PreparedEdit
-            if let preparedEdit, preparedEdit.proposed.isEqual(to: editorText) {
+            if let preparedEdit, preparedEdit.proposed.isEqual(to: actual) {
                 edit = preparedEdit
             } else {
-                edit = try prepare(editorText, range: affectedRange)
+                edit = try prepare(actual, range: affectedRange)
             }
             switch edit.change {
             case let .paragraphs(replacements):
                 try model.commitParagraphs(replacements)
             case let .document(candidate):
+                if edit.normalized.length == 0 && attributedText.length > 0 {
+                    clearedDocument = (attributedText, model)
+                } else if candidate === clearedDocument?.model {
+                    clearedDocument = nil
+                }
                 model = candidate
             }
             attributedText = edit.normalized
