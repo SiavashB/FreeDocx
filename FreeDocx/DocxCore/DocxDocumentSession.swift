@@ -29,6 +29,7 @@ final class DocxDocumentSession {
     init(data: Data) throws {
         let package = try DocxPackage(data: data)
         let model = try DocxDocumentModel(package: package)
+        model.prepareFontsForImport()
 
         var documentAttributes: NSDictionary?
         let importedText = try NSAttributedString(

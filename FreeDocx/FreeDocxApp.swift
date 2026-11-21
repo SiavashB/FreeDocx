@@ -40,5 +40,35 @@ struct FreeDocxApp: App {
         DocumentGroup(newDocument: { FreeDocxDocument() }) { file in
             ContentView(document: file.document)
         }
+        .commands {
+            EditorFindCommands()
+        }
+    }
+}
+
+private struct EditorFindCommands: Commands {
+    @FocusedObject private var controller: RichTextEditorController?
+
+    var body: some Commands {
+        CommandGroup(after: .textEditing) {
+            Menu("Find") {
+                Button("Find…") { controller?.performFindAction(.showFindInterface) }
+                    .keyboardShortcut("f", modifiers: .command)
+                Button("Find and Replace…") {
+                    controller?.performFindAction(.showReplaceInterface)
+                }
+                .keyboardShortcut("f", modifiers: [.command, .option])
+                Divider()
+                Button("Find Next") { controller?.performFindAction(.nextMatch) }
+                    .keyboardShortcut("g", modifiers: .command)
+                Button("Find Previous") { controller?.performFindAction(.previousMatch) }
+                    .keyboardShortcut("g", modifiers: [.command, .shift])
+                Button("Use Selection for Find") {
+                    controller?.performFindAction(.setSearchString)
+                }
+                .keyboardShortcut("e", modifiers: .command)
+            }
+            .disabled(controller == nil)
+        }
     }
 }

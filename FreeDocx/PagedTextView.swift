@@ -115,6 +115,11 @@ final class PagedTextView: NSTextView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        window?.initialFirstResponder = self
+    }
+
     func apply(pageLayout: DocumentPageLayout) {
         guard self.pageLayout != pageLayout else { return }
         self.pageLayout = pageLayout

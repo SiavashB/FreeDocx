@@ -16,7 +16,6 @@ struct ContentView: View {
     var body: some View {
         VStack(spacing: 0) {
             FormattingToolbar(controller: editorController)
-            Divider()
 
             RichTextEditor(
                 text: $document.attributedText,
@@ -56,6 +55,7 @@ struct ContentView: View {
             .background(.bar)
         }
         .frame(minWidth: 620, minHeight: 480)
+        .focusedSceneObject(editorController)
         .alert("This edit isn’t supported yet", isPresented: Binding(
             get: { document.editRejectionMessage != nil },
             set: { if !$0 { document.editRejectionMessage = nil } }
@@ -68,84 +68,78 @@ struct ContentView: View {
     }
 }
 
-private struct FormattingToolbar: View {
-    @ObservedObject var controller: RichTextEditorController
-
-    var body: some View {
-        HStack(spacing: 4) {
-            Group {
-                Button(action: controller.toggleBold) {
-                    Image(systemName: "bold")
-                }
-                .keyboardShortcut("b", modifiers: .command)
-                .help("Bold (⌘B)")
-
-                Button(action: controller.toggleItalic) {
-                    Image(systemName: "italic")
-                }
-                .keyboardShortcut("i", modifiers: .command)
-                .help("Italic (⌘I)")
-
-                Button(action: controller.toggleUnderline) {
-                    Image(systemName: "underline")
-                }
-                .keyboardShortcut("u", modifiers: .command)
-                .help("Underline (⌘U)")
-            }
-
-            Divider()
-                .frame(height: 18)
-                .padding(.horizontal, 4)
-
-            Group {
-                Button(action: controller.alignLeft) {
-                    Image(systemName: "text.alignleft")
-                }
-                .help("Align Left")
-
-                Button(action: controller.alignCenter) {
-                    Image(systemName: "text.aligncenter")
-                }
-                .help("Align Center")
-
-                Button(action: controller.alignRight) {
-                    Image(systemName: "text.alignright")
-                }
-                .help("Align Right")
-            }
-
-            Divider()
-                .frame(height: 18)
-                .padding(.horizontal, 4)
-
-            Button(action: controller.toggleBulletedList) {
-                Image(systemName: "list.bullet")
-            }
-            .help("Add or Remove Bullets")
-
-            Spacer()
-
-            Button(action: controller.showFonts) {
-                Label("Fonts", systemImage: "textformat")
-            }
-            .help("Show the system font panel")
-
-            Button(action: controller.showColors) {
-                Label("Color", systemImage: "paintpalette")
-            }
-            .help("Show the system color panel")
-        }
-        .buttonStyle(.borderless)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(.bar)
-    }
-}
-
 @MainActor
 final class RichTextEditorController: ObservableObject {
+    struct Formatting: Equatable {
+        var fontSize: CGFloat?
+        var isBold = false
+        var isItalic = false
+        var isUnderlined = false
+        var isList = false
+        var alignment: NSTextAlignment = .left
+        var textColor = NSColor.black
+    }
+
+    @Published private(set) var formatting = Formatting()
+    private var formattingUpdatePending = false
     weak var textView: NSTextView?
     weak var scrollView: NSScrollView?
+
+    // Selection, typing attributes and storage can change together during an
+    // edit. Read their final values after TextKit and SwiftUI finish updating.
+    func scheduleFormattingUpdate() {
+        guard !formattingUpdatePending else { return }
+        formattingUpdatePending = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.formattingUpdatePending = false
+            self.updateFormatting()
+        }
+    }
+
+    private func updateFormatting() {
+        guard let textView, let storage = textView.textStorage else { return }
+        let selection = textView.selectedRange()
+        let attributes: [NSAttributedString.Key: Any]
+        if selection.length > 0, selection.location < storage.length {
+            attributes = storage.attributes(at: selection.location, effectiveRange: nil)
+        } else {
+            attributes = textView.typingAttributes
+        }
+
+        var current = Formatting()
+        let fallbackFont = textView.font ?? NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        let font = attributes[.font] as? NSFont ?? fallbackFont
+        let traits = NSFontManager.shared.traits(of: font)
+        current.isBold = traits.contains(.boldFontMask)
+        current.isItalic = traits.contains(.italicFontMask)
+        current.fontSize = font.pointSize
+        for range in textView.selectedRanges.map(\.rangeValue) where range.length > 0 {
+            storage.enumerateAttribute(.font, in: range) { value, _, stop in
+                if (value as? NSFont ?? fallbackFont).pointSize != font.pointSize {
+                    current.fontSize = nil
+                    stop.pointee = true
+                }
+            }
+            if current.fontSize == nil { break }
+        }
+        current.isUnderlined = (attributes[.underlineStyle] as? NSNumber)?.intValue ?? 0 != 0
+        let color = attributes[.foregroundColor] as? NSColor ?? .black
+        textView.effectiveAppearance.performAsCurrentDrawingAppearance {
+            current.textColor = color.usingColorSpace(.sRGB) ?? color
+        }
+
+        let ranges = selectedParagraphRanges(in: textView)
+        current.isList = allParagraphsHaveListMarkers(ranges, in: storage)
+        let style = attributes[.paragraphStyle] as? NSParagraphStyle ?? .default
+        current.alignment = style.alignment
+        if current.alignment == .natural {
+            current.alignment = textView.userInterfaceLayoutDirection == .rightToLeft ? .right : .left
+        }
+        if current != formatting {
+            formatting = current
+        }
+    }
 
     private func withEditor(_ action: (NSTextView) -> Void) {
         guard let textView else { return }
@@ -186,13 +180,7 @@ final class RichTextEditorController: ObservableObject {
             let ranges = selectedParagraphRanges(in: textView)
             guard !ranges.isEmpty else { return }
 
-            let allBulleted = ranges.allSatisfy { range in
-                textStorage.attribute(
-                    DocxEditorAttribute.listMarker,
-                    at: range.location,
-                    effectiveRange: nil
-                ) != nil
-            }
+            let allBulleted = allParagraphsHaveListMarkers(ranges, in: textStorage)
             let combinedRange = NSUnionRange(ranges.first!, ranges.last!)
             guard textView.shouldChangeText(
                 in: combinedRange,
@@ -256,6 +244,53 @@ final class RichTextEditorController: ObservableObject {
         }
     }
 
+    /// Return on an empty list item ends the list without adding a paragraph.
+    func endListIfEmpty() -> Bool {
+        guard let textView,
+              let textStorage = textView.textStorage,
+              textStorage.length > 0 else { return false }
+        let selection = textView.selectedRange()
+        guard selection.length == 0 else { return false }
+        let plainText = textStorage.string as NSString
+        var paragraphStart = 0
+        var paragraphEnd = 0
+        var contentsEnd = 0
+        plainText.getParagraphStart(
+            &paragraphStart,
+            end: &paragraphEnd,
+            contentsEnd: &contentsEnd,
+            for: selection
+        )
+        guard paragraphStart == contentsEnd,
+              let range = selectedParagraphRanges(in: textView).first,
+              textStorage.attribute(
+                DocxEditorAttribute.listMarker,
+                at: range.location,
+                effectiveRange: nil
+              ) != nil else { return false }
+
+        toggleBulletedList()
+        var attributes = textView.typingAttributes
+        attributes.removeValue(forKey: DocxEditorAttribute.listMarker)
+        attributes.removeValue(forKey: DocxEditorAttribute.listMarkerIndent)
+        let style = (attributes[.paragraphStyle] as? NSParagraphStyle
+            ?? NSParagraphStyle.default).mutableCopy() as! NSMutableParagraphStyle
+        style.textLists = []
+        style.firstLineHeadIndent = 0
+        style.headIndent = 0
+        attributes[.paragraphStyle] = style
+        textView.typingAttributes = attributes
+        return true
+    }
+
+    func performFindAction(_ action: NSTextFinder.Action) {
+        withEditor { textView in
+            let sender = NSMenuItem()
+            sender.tag = action.rawValue
+            textView.performTextFinderAction(sender)
+        }
+    }
+
     func showFonts() {
         withEditor { textView in
             NSFontManager.shared.orderFrontFontPanel(textView)
@@ -295,49 +330,54 @@ final class RichTextEditorController: ObservableObject {
     }
 
     private func toggleFontTrait(_ trait: NSFontTraitMask) {
+        changeFonts { font, selectionFont in
+            let manager = NSFontManager.shared
+            if manager.traits(of: selectionFont).contains(trait) {
+                return manager.convert(font, toNotHaveTrait: trait)
+            }
+            return manager.convert(font, toHaveTrait: trait)
+        }
+    }
+
+    func setFontSize(_ size: CGFloat) {
+        changeFonts { font, _ in NSFontManager.shared.convert(font, toSize: size) }
+    }
+
+    private func changeFonts(_ convert: (NSFont, NSFont) -> NSFont) {
         withEditor { textView in
+            guard let textStorage = textView.textStorage else { return }
             let selection = textView.selectedRange()
-            let fontManager = NSFontManager.shared
             let fallbackFont = textView.font ?? NSFont.systemFont(ofSize: NSFont.systemFontSize)
-            let currentFont: NSFont
-
-            if selection.length == 0 {
-                currentFont = textView.typingAttributes[.font] as? NSFont ?? fallbackFont
-            } else {
-                currentFont = textView.textStorage?.attribute(
-                    .font,
-                    at: selection.location,
-                    effectiveRange: nil
-                ) as? NSFont ?? fallbackFont
-            }
-
-            let shouldRemove = fontManager.traits(of: currentFont).contains(trait)
-            let convert: (NSFont) -> NSFont = { font in
-                if shouldRemove {
-                    return fontManager.convert(font, toNotHaveTrait: trait)
-                }
-                return fontManager.convert(font, toHaveTrait: trait)
-            }
 
             if selection.length == 0 {
                 var attributes = textView.typingAttributes
-                attributes[.font] = convert(currentFont)
+                let typingFont = attributes[.font] as? NSFont ?? fallbackFont
+                attributes[.font] = convert(typingFont, typingFont)
                 textView.typingAttributes = attributes
+                scheduleFormattingUpdate()
                 return
             }
 
-            guard textView.shouldChangeText(in: selection, replacementString: nil),
-                  let textStorage = textView.textStorage
-            else {
-                return
-            }
+            let ranges = textView.selectedRanges
+            guard textView.shouldChangeText(inRanges: ranges, replacementStrings: nil) else { return }
+            let selectionFont = textStorage.attribute(.font, at: selection.location, effectiveRange: nil)
+                as? NSFont ?? fallbackFont
 
             textStorage.beginEditing()
-            textStorage.enumerateAttribute(.font, in: selection) { value, range, _ in
-                textStorage.addAttribute(.font, value: convert(value as? NSFont ?? fallbackFont), range: range)
+            for range in ranges {
+                textStorage.enumerateAttribute(.font, in: range.rangeValue) { value, run, _ in
+                    let font = value as? NSFont ?? fallbackFont
+                    textStorage.addAttribute(.font, value: convert(font, selectionFont), range: run)
+                }
             }
             textStorage.endEditing()
             textView.didChangeText()
+        }
+    }
+
+    private func allParagraphsHaveListMarkers(_ ranges: [NSRange], in storage: NSTextStorage) -> Bool {
+        !ranges.isEmpty && ranges.allSatisfy { range in
+            storage.attribute(DocxEditorAttribute.listMarker, at: range.location, effectiveRange: nil) != nil
         }
     }
 
@@ -422,7 +462,7 @@ private struct RichTextEditor: NSViewRepresentable {
     let validateEdit: (NSAttributedString, [NSRange], [String]?) -> Bool
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text, validateEdit: validateEdit)
+        Coordinator(text: $text, controller: controller, validateEdit: validateEdit)
     }
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -436,6 +476,8 @@ private struct RichTextEditor: NSViewRepresentable {
         textView.importsGraphics = true
         textView.allowsUndo = true
         textView.usesFindPanel = true
+        textView.usesFindBar = true
+        textView.isIncrementalSearchingEnabled = true
         textView.usesFontPanel = true
         textView.isAutomaticSpellingCorrectionEnabled = false
         textView.isContinuousSpellCheckingEnabled = false
@@ -457,6 +499,7 @@ private struct RichTextEditor: NSViewRepresentable {
 
         controller.textView = textView
         controller.scrollView = scrollView
+        controller.scheduleFormattingUpdate()
         return scrollView
     }
 
@@ -478,6 +521,7 @@ private struct RichTextEditor: NSViewRepresentable {
         let length = min(selection.length, text.length - location)
         textView.setSelectedRange(NSRange(location: location, length: length))
         context.coordinator.isApplyingExternalUpdate = false
+        controller.scheduleFormattingUpdate()
         textView.repaginate()
     }
 
@@ -487,14 +531,17 @@ private struct RichTextEditor: NSViewRepresentable {
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         @Binding private var text: NSAttributedString
+        private let controller: RichTextEditorController
         private var validateEdit: (NSAttributedString, [NSRange], [String]?) -> Bool
         var isApplyingExternalUpdate = false
 
         init(
             text: Binding<NSAttributedString>,
+            controller: RichTextEditorController,
             validateEdit: @escaping (NSAttributedString, [NSRange], [String]?) -> Bool
         ) {
             _text = text
+            self.controller = controller
             self.validateEdit = validateEdit
         }
 
@@ -518,6 +565,19 @@ private struct RichTextEditor: NSViewRepresentable {
             )
         }
 
+        func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            commandSelector == #selector(NSTextView.insertNewline(_:))
+                && controller.endListIfEmpty()
+        }
+
+        func textViewDidChangeSelection(_ notification: Notification) {
+            controller.scheduleFormattingUpdate()
+        }
+
+        func textViewDidChangeTypingAttributes(_ notification: Notification) {
+            controller.scheduleFormattingUpdate()
+        }
+
         func textDidChange(_ notification: Notification) {
             guard !isApplyingExternalUpdate,
                   let textView = notification.object as? NSTextView
@@ -539,6 +599,7 @@ private struct RichTextEditor: NSViewRepresentable {
                 ))
                 isApplyingExternalUpdate = false
             }
+            controller.scheduleFormattingUpdate()
             (textView as? PagedTextView)?.schedulePagination()
         }
     }

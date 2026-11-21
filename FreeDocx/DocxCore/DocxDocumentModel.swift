@@ -4,6 +4,7 @@
 //
 
 import AppKit
+import CoreText
 import Foundation
 
 enum DocxModelError: LocalizedError {
@@ -223,6 +224,10 @@ final class DocxDocumentModel {
             paragraph: paragraph.element,
             in: range
         )
+    }
+
+    func prepareFontsForImport() {
+        styles.prepareFonts(in: paragraphs)
     }
 
     func pageLayout(fallback: DocumentPageLayout) -> DocumentPageLayout {
@@ -853,6 +858,67 @@ final class DocxDocumentModel {
 
 }
 
+/// Word keeps many of its fonts private to its app bundle. Register matching
+/// families for this process so both the importer and TextKit use their actual
+/// metrics. The installed fonts are read in place, never copied or installed.
+private enum DocxFontResolver {
+    private static let registrationLock = NSLock()
+    private static var attemptedNames = Set<String>()
+
+    private static let wordFontsByName: [String: [URL]] = {
+        // Launch Services can be unavailable in a restricted process. Also
+        // check the standard application locations without searching the disk.
+        let applicationURLs = [
+            NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.microsoft.Word"),
+            URL(fileURLWithPath: "/Applications/Microsoft Word.app", isDirectory: true),
+            FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Applications/Microsoft Word.app", isDirectory: true)
+        ].compactMap { $0 }
+        let files = applicationURLs.lazy.compactMap { applicationURL in
+            try? FileManager.default.contentsOfDirectory(
+                at: applicationURL.appendingPathComponent("Contents/Resources/DFonts"),
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            )
+        }.first ?? []
+        var result: [String: [URL]] = [:]
+        for file in files.sorted(by: { $0.lastPathComponent < $1.lastPathComponent })
+            where ["ttf", "otf", "ttc"].contains(file.pathExtension.lowercased()) {
+            let descriptors = CTFontManagerCreateFontDescriptorsFromURL(file as CFURL)
+                as? [CTFontDescriptor] ?? []
+            for descriptor in descriptors {
+                for key in [kCTFontFamilyNameAttribute, kCTFontNameAttribute, kCTFontDisplayNameAttribute] {
+                    guard let name = CTFontDescriptorCopyAttribute(descriptor, key) as? String else {
+                        continue
+                    }
+                    let normalized = name.lowercased()
+                    if result[normalized]?.contains(file) != true {
+                        result[normalized, default: []].append(file)
+                    }
+                }
+            }
+        }
+        return result
+    }()
+
+    static func font(named name: String, size: CGFloat) -> NSFont? {
+        if let installed = NSFont(name: name, size: size) {
+            return installed
+        }
+
+        registrationLock.lock()
+        defer { registrationLock.unlock() }
+        if attemptedNames.insert(name.lowercased()).inserted {
+            // Register every face in a family before NSFontManager resolves
+            // bold and italic; registering only the regular face loses them.
+            for url in wordFontsByName[name.lowercased()] ?? [] {
+                CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
+            }
+        }
+        return NSFont(name: name, size: size)
+    }
+}
+
 /// Resolves paragraph presentation through Word's style inheritance instead
 /// of guessing from rendered text. The style part remains untouched on save;
 /// this resolver is only used to build faithful editor metadata.
@@ -1029,7 +1095,7 @@ private struct DocxStyleResolver {
             let normalized = declaredFamily.lowercased()
             let entry = entries[normalized]
             if let alternativeName = entry?.alternativeName,
-               let font = NSFont(name: alternativeName, size: size) {
+               let font = DocxFontResolver.font(named: alternativeName, size: size) {
                 return font
             }
 
@@ -1185,6 +1251,15 @@ private struct DocxStyleResolver {
         }
     }
 
+    func prepareFonts(in paragraphs: [DocxParagraph]) {
+        let families = Set(paragraphs.flatMap { paragraph in
+            runPresentations(in: paragraph.element).compactMap(\.properties.fontFamily)
+        })
+        for family in families {
+            _ = DocxFontResolver.font(named: family, size: 12)
+        }
+    }
+
     private func runPresentations(in paragraph: XMLElement) -> [RunPresentation] {
         let runs = ((try? paragraph.nodes(
             forXPath: ".//*[local-name()='r']"
@@ -1207,9 +1282,17 @@ private struct DocxStyleResolver {
         for run: XMLElement,
         paragraph: XMLElement
     ) -> ResolvedRunProperties {
+        let paragraphStyles = paragraphStyleChain(for: paragraph)
         var result = ResolvedRunProperties()
+        if !paragraphStyles.isEmpty {
+            // Word uses 10 pt for a defined paragraph style when no size is
+            // supplied anywhere in its hierarchy. Seed that fallback before
+            // merging explicit sizes; AppKit's imported 12 pt is not the
+            // document's size and would otherwise change line wrapping.
+            result.pointSize = 10
+        }
         merge(defaultRunProperties, into: &result)
-        for style in paragraphStyleChain(for: paragraph).reversed() {
+        for style in paragraphStyles.reversed() {
             merge(style.runProperties, into: &result, isStyleDefinition: true)
         }
         for style in characterStyleChain(for: run).reversed() {
@@ -1406,7 +1489,7 @@ private struct DocxStyleResolver {
         let baseFont: NSFont
         let substitutedSourceFamily: String?
         if let family = properties.fontFamily,
-           let namedFont = NSFont(name: family, size: size) {
+           let namedFont = DocxFontResolver.font(named: family, size: size) {
             baseFont = namedFont
             substitutedSourceFamily = nil
         } else if let family = properties.fontFamily,
