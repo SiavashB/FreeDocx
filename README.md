@@ -2,6 +2,8 @@
 
 FreeDocx is a small, native macOS viewer and editor for `.docx` files. AppKit/TextKit provides the editing surface, while an OOXML-first document core owns the Word package and is the only save source.
 
+[How to edit a Word document on Mac without Microsoft Word](https://freedocx.thirdeyeds.com/guides/edit-word-document-on-mac/)
+
 ## Current feature set
 
 - Open existing `.docx` files and create new ones
