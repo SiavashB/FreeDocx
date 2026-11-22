@@ -1,9 +1,15 @@
 # FreeDocx working agreements
 
+## Product positioning
+
+- Lead with saving edits directly to the same `.docx` on a Mac. The user can send the Word file back or take turns editing it with an AI assistant that has local file access.
+- Describe the Pages workflow accurately. Pages opens a Word file as a Pages document, and an edited `.docx` is a separate export. [Apple’s conversion guide](https://support.apple.com/en-us/105050)
+
 ## User files and manual testing
 
 - Never open, edit, save, or use the user's personal `.docx` files for development or verification.
 - Use generated fixtures or disposable test documents for development checks.
+- Store all generated sample and test documents in the project-root `Test Documents` folder. Keep build output, caches, and logs in `Temp`.
 - Do not launch or control the FreeDocx GUI, use System Events, or take application screenshots. The user is the manual test agent.
 - When a change needs visual or interactive verification, ask the user to test it and provide the result or a screenshot.
 

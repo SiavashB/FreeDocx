@@ -1,6 +1,10 @@
 # FreeDocx
 
-FreeDocx is a small, native macOS viewer and editor for `.docx` files. AppKit/TextKit provides the editing surface, while an OOXML-first document core owns the Word package and is the only save source.
+FreeDocx is a small, native macOS viewer and editor for `.docx` files. It saves edits directly to the same Word file, so you can send it back or work on it with an AI assistant that has local file access.
+
+Apple Pages opens a Word file as a Pages document. To get the edits back in Word format, export a separate `.docx` copy. [Apple’s conversion guide](https://support.apple.com/en-us/105050)
+
+[How to edit a Word document on Mac without Microsoft Word](https://freedocx.thirdeyeds.com/guides/edit-word-document-on-mac/)
 
 ## Current feature set
 
@@ -18,6 +22,8 @@ FreeDocx is a small, native macOS viewer and editor for `.docx` files. AppKit/Te
 - Quit when the last document window closes
 
 ## Document architecture
+
+AppKit/TextKit provides the editing surface, while an OOXML-first document core owns the Word package and is the only save source.
 
 - `DocxPackage` retains every ZIP entry and returns the exact original bytes for a no-op save.
 - `DocxDocumentModel` owns `word/document.xml`, stable paragraph identities, numbering, style inheritance, and page geometry.
@@ -46,6 +52,8 @@ Run the generated-fixture package regression with:
 ```sh
 sh Scripts/test-docx-core.sh
 ```
+
+Generated sample and test documents belong in the project-root `Test Documents/` folder. Build output, caches, and logs belong in `Temp/`. Both folders are ignored by Git.
 
 ## Scope
 

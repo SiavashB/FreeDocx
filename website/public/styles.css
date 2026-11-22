@@ -40,11 +40,13 @@ a:focus-visible, button:focus-visible, summary:focus-visible { outline: 3px soli
 h1 { margin: 0; font-size: clamp(2.75rem, 4.45vw, 4rem); font-weight: 600; line-height: 1.18; letter-spacing: -2.1px; }
 .hero-lead { font-size: clamp(1.25rem, 1.8vw, 1.65rem); line-height: 1.55; margin: 24px 0 0; max-width: 600px; }
 .hero-description { max-width: 540px; margin: 23px 0 0; font-size: clamp(1.125rem, 1.65vw, 1.4rem); line-height: 1.6; }
-.download-button { display: inline-flex; align-items: center; justify-content: center; gap: 18px; margin-top: 38px; min-height: 62px; max-width: 100%; padding: 16px 27px; border: 1px solid #0071da; border-radius: 16px; background: linear-gradient(115deg, #008bdc, #0075d9); box-shadow: inset 0 1px 0 #ffffff24; color: white; font: 550 1.25rem/1.4 var(--sans); cursor: pointer; transition: filter .15s; }
-.download-button:hover { filter: brightness(.94); }
-.download-button .icon { width: 28px; height: 28px; stroke-width: 1.7; }
+.primary-action { display: inline-flex; align-items: center; justify-content: center; min-height: 62px; max-width: 100%; padding: 16px 27px; border: 1px solid #0661b7; border-radius: 16px; background: linear-gradient(115deg, #0876c8, #065fc3); box-shadow: inset 0 1px 0 #ffffff24; color: white; font: 550 1.25rem/1.4 var(--sans); text-align: center; transition: filter .15s; }
+.primary-action:hover { filter: brightness(.94); }
+.hero-copy .primary-action { margin-top: 38px; }
 .hero-note { font-size: 1rem; line-height: 1.6; color: var(--muted); margin: 13px 0 0; }
-.hero-note span { margin-inline: 7px; }
+.hero-guide { margin: 15px 0 0; line-height: 1.55; }
+.text-link { color: #075fc6; text-decoration: underline; text-underline-offset: .18em; }
+.text-link:hover { color: var(--ink); }
 
 .app-figure { margin: 0; min-width: 0; }
 .app-window { overflow: hidden; border: 1px solid #c6d0de; border-radius: 16px; background: #eef0f5; box-shadow: 0 14px 22px -6px #224a7533, 0 3px 7px #1c365018; }
@@ -121,6 +123,29 @@ h1 { margin: 0; font-size: clamp(2.75rem, 4.45vw, 4rem); font-weight: 600; line-
 .site-footer > div { display: flex; gap: 24px; }
 .footer-separator { padding-inline: 7px; }
 
+.guide-width { width: min(47rem, calc(100% - 40px)); margin-inline: auto; }
+.guide-hero { padding-block: clamp(2.5rem, 7vw, 5rem); background: linear-gradient(110deg, #fbfdff, #edf5ff); }
+.guide-hero h1 { font-size: clamp(2.125rem, 5.5vw, 3.75rem); line-height: 1.13; letter-spacing: -.035em; text-wrap: balance; }
+.guide-hero p { max-width: 38rem; margin: 1.25rem 0 0; color: var(--muted); font-size: clamp(1.0625rem, 2.6vw, 1.25rem); line-height: 1.6; }
+.guide-content { padding-block: clamp(2rem, 5vw, 3.75rem); font-size: 1.0625rem; line-height: 1.7; }
+.guide-content > * + * { margin-top: 2.75rem; }
+.guide-content h2 { margin: 0 0 .7rem; font-size: clamp(1.5rem, 3.6vw, 2rem); line-height: 1.25; font-weight: 600; letter-spacing: -.025em; }
+.guide-content h3 { margin: 0; font-size: 1.125rem; line-height: 1.4; }
+.guide-content p { margin: 0; }
+.guide-content h3 + p { margin-top: .3rem; }
+.guide-content code, .guide-content kbd, .guide-hero code { font-size: .91em; }
+.guide-steps { margin-block: 1.25rem; padding-inline-start: 1.5rem; }
+.guide-steps > li { padding-inline-start: .25rem; }
+.guide-steps > li + li { margin-top: .9rem; }
+.guide-steps > li::marker { font-weight: 650; }
+.guide-example { margin: .9rem 0 0; padding: 1rem; border: 1px solid var(--line); border-radius: 12px; background: #f8faff; }
+.guide-example figcaption { font-weight: 600; }
+.guide-example dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: .15rem .9rem; margin: .25rem 0 0; }
+.guide-example dt { color: var(--muted); }
+.guide-example dd { margin: 0; }
+.guide-callout { padding: clamp(1rem, 4vw, 2rem); border-radius: 16px; background: #edf5ff; }
+.guide-callout .primary-action { margin-top: 1rem; }
+
 @media (min-width: 1450px) {
   .hero-layout { gap: 70px; padding-block: 66px 72px; }
   .document-canvas { height: 420px; }
@@ -132,7 +157,7 @@ h1 { margin: 0; font-size: clamp(2.75rem, 4.45vw, 4rem); font-weight: 600; line-
   .wrap-wide { width: calc(100% - 48px); }
   .hero-layout { gap: 32px; }
   h1 { font-size: clamp(2.5rem, 4.45vw, 3.25rem); }
-  .download-button { gap: 12px; padding-inline: 20px; font-size: 1.0625rem; border-radius: 13px; }
+  .primary-action { padding-inline: 20px; font-size: 1.0625rem; border-radius: 13px; }
   .window-toolbar { padding-inline: 13px; gap: 3px; }
   .toolbar-divider { margin-inline: 4px; }
   .document-canvas { height: 372px; padding-inline: 20px; }
@@ -157,7 +182,7 @@ h1 { margin: 0; font-size: clamp(2.75rem, 4.45vw, 4rem); font-weight: 600; line-
   h1 { font-size: clamp(2.75rem, 6.5vw, 3.75rem); }
   .hero-lead { font-size: 1.5rem; }
   .hero-description { font-size: 1.25rem; max-width: 580px; }
-  .download-button { font-size: 1.1875rem; }
+  .primary-action { font-size: 1.1875rem; }
   .app-figure { width: min(560px, 100%); justify-self: center; }
   .window-toolbar { gap: 7px; }
   .document-canvas { height: 395px; padding-inline: 27px; }
@@ -186,10 +211,9 @@ h1 { margin: 0; font-size: clamp(2.75rem, 4.45vw, 4rem); font-weight: 600; line-
   h1 { font-size: clamp(2rem, 7.7vw, 2.75rem); letter-spacing: -1.15px; }
   .hero-lead { margin-top: 21px; font-size: 1.25rem; }
   .hero-description { margin-top: 17px; font-size: 1.0625rem; }
-  .download-button { width: 100%; min-height: 56px; padding-inline: 12px; margin-top: 27px; gap: 12px; font-size: 1rem; border-radius: 12px; }
-  .download-button .icon { width: 23px; height: 23px; }
+  .primary-action { width: 100%; min-height: 56px; padding-inline: 12px; font-size: 1rem; border-radius: 12px; }
+  .hero-copy .primary-action { margin-top: 27px; }
   .hero-note { font-size: .875rem; margin-top: 12px; }
-  .hero-note span { margin-inline: 5px; }
   .app-window { border-radius: 11px; }
   .window-titlebar { height: 32px; font-size: .75rem; }
   .traffic-lights { left: 10px; gap: 5px; }

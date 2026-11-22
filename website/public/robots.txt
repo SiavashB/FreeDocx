@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://freedocx.thirdeyeds.com/sitemap.xml

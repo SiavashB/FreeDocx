@@ -1,5 +1,6 @@
 # Xcode and Swift build output
 Temp/
+Test Documents/
 .build/
 DerivedData/
 *.xcuserstate

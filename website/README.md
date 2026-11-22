@@ -1,6 +1,6 @@
 # FreeDocx website
 
-A responsive, dependency-free landing page based on the approved November 18, 2026 mockup. The AI workflow diagram shows the user chatting with an assistant, represented by the ChatGPT and Claude icons, above the DOCX file they both edit. All illustration assets are local SVG or HTML/CSS. The résumé is invented sample content.
+A responsive, dependency-free site based on the approved November 18, 2026 mockup. The AI workflow diagram shows the user chatting with an assistant, represented by the ChatGPT and Claude icons, above the DOCX file they both edit. All illustration assets are local SVG or HTML/CSS. The résumé is invented sample content.
 
 The ChatGPT and Claude marks belong to OpenAI and Anthropic, respectively. The SVG artwork comes from [Lobe Icons](https://github.com/lobehub/lobe-icons) and includes its [MIT license](public/assets/assistant-icons-license.txt).
 
@@ -17,9 +17,9 @@ The current design is committed separately. The Sites publication repository als
 
 ## Design scope
 
-The download button is intentionally an unconnected `type="button"` placeholder. Connect it to an installer only when requested. Navigation and FAQ disclosures use native HTML; the page has no JavaScript, external fonts, analytics, or upload functionality.
+The homepage links to the public source and build instructions while FreeDocx is available as source. The [Word editing guide](public/guides/edit-word-document-on-mac/index.html) explains the FreeDocx workflow and how to export a Word file from Apple Pages. The site uses native HTML navigation and FAQ disclosures.
 
-The primary audience needs occasional, simple edits to .docx files without paying for Microsoft Word. The supporting AI workflow describes taking turns on a saved local file with an assistant that can access it. It does not imply a built-in AI connection or live collaboration. The FAQ explains saving and closing between turns.
+The homepage leads with saving quick edits directly to the same `.docx` file. The guide explains how Pages opens a Word file as a Pages document and exports an edited Word copy. The AI workflow and FAQ describe taking turns with an assistant that can access the saved local file. Save and close the file between turns.
 
 Visual verification remains with the user. No browser screenshots or FreeDocx GUI checks are performed during implementation.
 
@@ -46,6 +46,8 @@ npm run deploy:check
 ```
 
 For the public release, sign in to the Cloudflare account that manages `thirdeyeds.com` with `npx cf auth login` if needed. From `website/`, run `npm run deploy`. That command publishes the files to `freedocx.thirdeyeds.com`. Cloudflare creates the DNS record and provisions HTTPS for the custom domain. [Cloudflare custom domains](https://developers.cloudflare.com/workers/configuration/routing/custom-domains/)
+
+The FreeDocx HTTP redirect is a Cloudflare Single Redirect scoped to `freedocx.thirdeyeds.com`. It preserves the path and query string. Both public pages are listed in `sitemap.xml`, which `robots.txt` references. [Live sitemap](https://freedocx.thirdeyeds.com/sitemap.xml)
 
 ## Private design preview
 

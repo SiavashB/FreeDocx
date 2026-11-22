@@ -5,10 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#ffffff">
     <title>FreeDocx — A free .docx editor for Mac</title>
-    <meta name="description" content="Open, edit, and save Word documents on your Mac without a Microsoft 365 subscription. FreeDocx is free and made for the occasional edit.">
+    <meta name="description" content="Edit Word documents on your Mac and save changes directly to the same .docx file. FreeDocx is free and open source.">
     <meta property="og:type" content="website">
     <meta property="og:title" content="FreeDocx — A free .docx editor for Mac">
-    <meta property="og:description" content="Fix a typo, update a résumé, or make a small change. A simple, free app for your .docx files.">
+    <meta property="og:description" content="Fix a typo or update a résumé and save the changes directly to your Word file.">
     <link rel="canonical" href="https://freedocx.thirdeyeds.com/">
     <meta property="og:url" content="https://freedocx.thirdeyeds.com/">
     <meta property="og:image" content="https://freedocx.thirdeyeds.com/assets/app-icon.png">
@@ -18,7 +18,6 @@
   </head>
   <body>
     <svg class="icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-      <symbol id="icon-download" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M4 17v4h16v-4"/></symbol>
       <symbol id="icon-app" viewBox="0 0 48 48"><rect x="4" y="8" width="40" height="33" rx="5"/><circle cx="10" cy="14" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="14" r="1" fill="currentColor" stroke="none"/><circle cx="20" cy="14" r="1" fill="currentColor" stroke="none"/></symbol>
       <symbol id="icon-lightning" viewBox="0 0 48 48"><path d="M28 4 10 27h13l-3 17 18-24H25l3-16Z"/></symbol>
       <symbol id="icon-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
@@ -32,7 +31,7 @@
     <a class="skip-link" href="#main">Skip to content</a>
 
     <header class="site-header wrap">
-      <a class="brand" href="#" aria-label="FreeDocx home">
+      <a class="brand" href="/" aria-label="FreeDocx home">
         <img src="assets/app-icon-128.png" width="42" height="42" alt="">
         <span>FreeDocx</span>
       </a>
@@ -49,11 +48,11 @@
         <div class="hero-layout wrap">
           <div class="hero-copy">
             <h1 id="hero-title">A free .docx editor<br>for Mac</h1>
-            <p class="hero-lead">Open, edit, and save Word documents — without a Microsoft 365 subscription.</p>
-            <p class="hero-description">Perfect for the times you just need to fix a typo, update a résumé, or make a small change.</p>
-            <button class="download-button" type="button" aria-describedby="download-placeholder"><svg class="icon" aria-hidden="true"><use href="#icon-download"/></svg><span>Download FreeDocx for Mac</span></button>
-            <span class="visually-hidden" id="download-placeholder">Design preview: this download button is a placeholder.</span>
-            <p class="hero-note">For Mac <span aria-hidden="true">·</span> Free, no account required</p>
+            <p class="hero-lead">Edit a Word document on your Mac and save changes directly to the same .docx file.</p>
+            <p class="hero-description">Fix a typo, update a résumé, or send a revised document back to a colleague.</p>
+            <a class="primary-action" id="get-freedocx" href="https://github.com/SiavashB/FreeDocx#run-locally" aria-describedby="build-requirements">View source and build instructions</a>
+            <p class="hero-note" id="build-requirements">Build with Xcode on macOS 26.5 or later.</p>
+            <p class="hero-guide"><a class="text-link" href="/guides/edit-word-document-on-mac/">How to edit a Word document on Mac</a></p>
           </div>
 
           <figure class="app-figure">
@@ -103,7 +102,10 @@
       <section class="features wrap" id="features" aria-label="FreeDocx features">
         <article class="feature">
           <img class="feature-icon docx-feature" src="assets/docx-file.svg" width="58" height="62" alt="" loading="lazy">
-          <div><h2>Works with .docx</h2><p>Open, edit, and save your Word documents.</p></div>
+          <div>
+            <h2>Save back to the same Word file</h2>
+            <p>In Apple Pages, you export your edits to Word. In FreeDocx, pressing <kbd>⌘S</kbd> updates the .docx you opened.</p>
+          </div>
         </article>
         <article class="feature">
           <svg class="feature-icon icon" aria-hidden="true"><use href="#icon-app"/></svg>
@@ -118,7 +120,7 @@
       <section class="workflow wrap-wide" id="workflow" aria-labelledby="workflow-title">
         <svg class="workflow-art" viewBox="0 0 332 196" width="332" height="196" role="img" aria-labelledby="workflow-diagram-title" aria-describedby="workflow-diagram-desc">
           <title id="workflow-diagram-title">You and your AI assistant work on one document</title>
-          <desc id="workflow-diagram-desc">You chat with your assistant, represented by the ChatGPT and Claude logos. Arrows from both of you lead to the same local .docx file, which you take turns editing.</desc>
+          <desc id="workflow-diagram-desc">You chat with your assistant, represented by the ChatGPT and Claude logos. Arrows from both of you lead to Résumé.docx, the local file you take turns editing.</desc>
           <defs>
             <marker id="workflow-arrowhead" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
               <path d="M2 1.5 8 5 2 8.5" fill="none" stroke="#4280b9" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
@@ -140,12 +142,12 @@
           <text x="276" y="78">AI assistant</text>
 
           <image href="assets/docx-file.svg" x="138.5" y="110" width="55" height="60"/>
-          <text x="166" y="189">Same file</text>
+          <text x="166" y="189">Résumé.docx</text>
         </svg>
         <div class="workflow-copy">
           <h2 id="workflow-title">Collaborate with an AI assistant</h2>
-          <p>Take turns on the same document — edit in FreeDocx, then ask your AI assistant to review, rewrite, or improve it using your local file.</p>
-          <p class="workflow-note">For assistants with local file access.</p>
+          <p>Save and close <strong>Résumé.docx</strong> in FreeDocx. Ask an assistant with local file access, “Shorten the first experience bullet in Résumé.docx and save the change.”</p>
+          <p class="workflow-note">When the assistant finishes, reopen the same file in FreeDocx to review the edited bullet.</p>
         </div>
       </section>
 
@@ -159,7 +161,8 @@
         <h2 id="faq-title">A few useful answers</h2>
         <div class="faq-list">
           <details><summary>Do I need Microsoft Word?<svg class="icon" aria-hidden="true"><use href="#icon-plus"/></svg></summary><p>No. FreeDocx is a standalone Mac app. You don’t need Microsoft Word installed or a Microsoft subscription to use it. FreeDocx is free and open source.</p></details>
-          <details><summary>What can I edit?<svg class="icon" aria-hidden="true"><use href="#icon-plus"/></svg></summary><p>FreeDocx supports text, basic formatting, and simple lists in .docx files. Editing complex tables, tracked changes, and headers or footers isn’t available. Older .doc files aren’t supported.</p></details>
+          <details><summary>Can I keep editing the same Word file?<svg class="icon" aria-hidden="true"><use href="#icon-plus"/></svg></summary><p>FreeDocx saves edits directly to the .docx you opened. Apple Pages opens a Word file as a Pages document and exports the changes to a separate Word copy. <a class="text-link" href="/guides/edit-word-document-on-mac/#apple-pages">See the Pages steps</a>.</p></details>
+          <details><summary>What can I edit?<svg class="icon" aria-hidden="true"><use href="#icon-plus"/></svg></summary><p>FreeDocx supports text, basic formatting, and simple lists in .docx files. Use a full word processor for complex tables, tracked changes, and editing headers or footers. Convert older .doc files to .docx first.</p></details>
           <details><summary>How do I share a file with my AI assistant?<svg class="icon" aria-hidden="true"><use href="#icon-plus"/></svg></summary><p>Use an assistant that can access files saved on your Mac. Save and close the document before the assistant edits it, then reopen it in FreeDocx. FreeDocx doesn’t include an AI connection or live syncing.</p></details>
         </div>
       </section>
