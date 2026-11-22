@@ -715,30 +715,30 @@ final class DocxDocumentModel {
         return paragraph
     }
 
-    /// Non-semantic elements Word writes into nearly every real document.
-    /// Editing a paragraph that contains them is safe: `w:proofErr` is an inert
-    /// spell-check hint that is kept as-is, and the `w:lastRendered*Break` runs
-    /// are rendering hints Word regenerates on its next save, so it is
-    /// acceptable for them to disappear from an edited paragraph.
-    private static let harmlessArtifactNames: Set<String> = [
-        "proofErr",
-        "lastRenderedPageBreak",
-        "lastRenderedLineBreak"
-    ]
+    /// Word can regenerate these empty proofing and layout hints after an edit.
+    /// An extension element with the same local name may contain document data.
+    private static func isWordEditingHint(_ element: XMLElement) -> Bool {
+        guard element.childCount == 0,
+              element.uri == "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+              || element.uri == "http://purl.oclc.org/ooxml/wordprocessingml/main" else { return false }
+        switch element.localName {
+        case "proofErr", "lastRenderedPageBreak", "lastRenderedLineBreak":
+            return true
+        default:
+            return false
+        }
+    }
 
     private static func hasOnlySimpleRuns(_ paragraph: XMLElement) -> Bool {
         for child in paragraph.children ?? [] {
-            guard let element = child as? XMLElement, let name = element.localName else {
-                continue
-            }
-            guard name == "pPr" || name == "r" || harmlessArtifactNames.contains(name) else {
+            guard let element = child as? XMLElement else { continue }
+            guard element.localName == "pPr" || element.localName == "r" || isWordEditingHint(element) else {
                 return false
             }
-            if name == "r" {
+            if element.localName == "r" {
                 for runChild in element.children ?? [] {
-                    guard let runElement = runChild as? XMLElement,
-                          let runName = runElement.localName else { continue }
-                    guard runName == "rPr" || runName == "t" || harmlessArtifactNames.contains(runName) else {
+                    guard let runElement = runChild as? XMLElement else { continue }
+                    guard runElement.localName == "rPr" || runElement.localName == "t" || isWordEditingHint(runElement) else {
                         return false
                     }
                 }
