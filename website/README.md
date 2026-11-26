@@ -17,7 +17,7 @@ The current design is committed separately. The Sites publication repository als
 
 ## Design scope
 
-The homepage links to the public source and build instructions while FreeDocx is available as source. The [Word editing guide](public/guides/edit-word-document-on-mac/index.html) explains the FreeDocx workflow and how to export a Word file from Apple Pages. The site uses native HTML navigation and FAQ disclosures.
+The homepage and the [Word editing guide](public/guides/edit-word-document-on-mac/index.html) link to the signed and notarized beta DMG in `public/downloads/`, served from the website’s own domain. The disk image places FreeDocx beside an Applications shortcut for drag-to-install. Both download buttons identify the beta. The guide explains the FreeDocx workflow and how to export a Word file from Apple Pages. The site uses native HTML navigation and FAQ disclosures.
 
 The homepage leads with saving quick edits directly to the same `.docx` file. The guide explains how Pages opens a Word file as a Pages document and exports an edited Word copy. The AI workflow and FAQ describe taking turns with an assistant that can access the saved local file. Save and close the file between turns.
 
